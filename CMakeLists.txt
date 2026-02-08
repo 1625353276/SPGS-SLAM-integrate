@@ -87,8 +87,8 @@ include_directories(
 ##  Build ORB-SLAM3 library
 ##################################################################################
 
-# Compile DBoW2
-add_subdirectory(${ORB_SLAM3_SOURCE_DIR}/Thirdparty/DBoW2)
+## Compile DBoW2
+#add_subdirectory(${ORB_SLAM3_SOURCE_DIR}/Thirdparty/DBoW2)
 
 # Compile DBoW3 (for SuperPoint)
 add_subdirectory(${ORB_SLAM3_SOURCE_DIR}/Thirdparty/DBoW3)
@@ -136,7 +136,7 @@ target_link_libraries(ORB_SLAM3
     ${OpenCV_LIBS}
     ${EIGEN3_LIBS}
     ${Pangolin_LIBRARIES}
-    ${ORB_SLAM3_SOURCE_DIR}/Thirdparty/DBoW2/lib/libDBoW2.so
+#    ${ORB_SLAM3_SOURCE_DIR}/Thirdparty/DBoW2/lib/libDBoW2.so
     ${ORB_SLAM3_SOURCE_DIR}/Thirdparty/DBoW3/lib/libDBoW3.so
     ${ORB_SLAM3_SOURCE_DIR}/Thirdparty/g2o/lib/libg2o.so
     ${Boost_LIBRARIES}

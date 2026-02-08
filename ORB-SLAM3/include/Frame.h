@@ -21,14 +21,23 @@
 #define FRAME_H
 
 #include<vector>
+#include <string>
+#include <map>
+#include <iostream>
+using namespace std;
 
-#include "Thirdparty/DBoW2/DBoW2/BowVector.h"
-#include "Thirdparty/DBoW2/DBoW2/FeatureVector.h"
+// #include "Thirdparty/DBoW2/DBoW2/BowVector.h"
+// #include "Thirdparty/DBoW2/DBoW2/FeatureVector.h"
+
+#include "Thirdparty/DBoW3/src/DBoW3.h"
+#include "Thirdparty/DBoW3/src/Vocabulary.h"
+#include "Thirdparty/DBoW3/src/BowVector.h"
 
 #include "Thirdparty/Sophus/sophus/geometry.hpp"
 
 #include "ImuTypes.h"
 #include "ORBVocabulary.h"
+#include "SPVocabulary.h"
 
 #include "Converter.h"
 #include "Settings.h"
@@ -75,6 +84,12 @@ public:
 
     // Compute Bag of Words representation.
     void ComputeBoW();
+
+    // Compute Bag of Words representation for SuperPoint.
+    void ComputeBoW3();
+
+    // Binarize SuperPoint descriptors
+    void binarize_descriptors();
 
     // Set the camera pose. (Imu pose is not modified!)
     void SetPose(const Sophus::SE3<float> &Tcw);
@@ -235,11 +250,21 @@ public:
     std::vector<float> mvDepth;
 
     // Bag of Words Vector structures.
-    DBoW2::BowVector mBowVec;
-    DBoW2::FeatureVector mFeatVec;
+    DBoW3::BowVector mBowVec;
+    DBoW3::FeatureVector mFeatVec;
+
+    // SuperPoint Bag of Words Vector structures.
+    DBoW3::BowVector mBow3Vec;
+    DBoW3::FeatureVector mFeat3Vec;
 
     // ORB descriptor, each row associated to a keypoint.
     cv::Mat mDescriptors, mDescriptorsRight;
+
+    // SuperPoint vocabulary
+    SPVocabulary* mpSPvocabulary;
+
+    // Binarized descriptors for SuperPoint
+    cv::Mat mDescriptors_bin;
 
     // MapPoints associated to keypoints, NULL pointer if no association.
     // Flag to identify outlier associations.

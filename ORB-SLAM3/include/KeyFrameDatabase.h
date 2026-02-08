@@ -27,6 +27,7 @@
 #include "KeyFrame.h"
 #include "Frame.h"
 #include "ORBVocabulary.h"
+#include "SPVocabulary.h"
 #include "Map.h"
 
 #include <boost/serialization/base_object.hpp>
@@ -78,6 +79,11 @@ public:
     // Relocalization
     std::vector<KeyFrame*> DetectRelocalizationCandidates(Frame* F, Map* pMap);
 
+    // SuperPoint support
+    void add_sp(KeyFrame* pKF);
+    void DetectNBestCandidates_sp(KeyFrame *pKF, vector<KeyFrame*> &vpLoopCand, vector<KeyFrame*> &vpMergeCand, int nNumCandidates);
+    void SetSPVocabulary(SPVocabulary* pSPVoc);
+
     void PreSave();
     void PostLoad(map<long unsigned int, KeyFrame*> mpKFid);
     void SetORBVocabulary(ORBVocabulary* pORBVoc);
@@ -89,6 +95,9 @@ protected:
 
    // Inverted file
    std::vector<list<KeyFrame*> > mvInvertedFile;
+
+   // SuperPoint inverted file
+   std::vector<list<KeyFrame*> > mvInvertedFile_sp;
 
    // For save relation without pointer, this is necessary for save/load function
    std::vector<list<long unsigned int> > mvBackupInvertedFileId;

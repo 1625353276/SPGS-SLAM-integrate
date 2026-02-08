@@ -112,6 +112,32 @@ void KeyFrame::ComputeBoW()
     }
 }
 
+void KeyFrame::binarize_descriptors(){
+    mDescriptors_bin = cv::Mat(mDescriptors.size(), CV_8UC1);
+    for(size_t i=0 ; i<mDescriptors.rows; ++i){
+        cv::Mat tmp;
+        cv::threshold(mDescriptors.row(i), tmp, 0, 1, cv::THRESH_BINARY);
+        for(size_t j=0; j<mDescriptors.cols; j++){
+            mDescriptors_bin.at<uchar>(i,j) = tmp.at<float>(j);
+        }
+    }
+}
+
+void KeyFrame::ComputeBoW3()
+{
+    binarize_descriptors();
+    if(mBow3Vec.empty() || mFeat3Vec.empty())
+    {
+        vector<cv::Mat> randomMatDesc = Converter::toDescriptorVector(mDescriptors_bin);
+        mpSPvocabulary->transform(randomMatDesc, mBow3Vec, mFeat3Vec, 4);
+    }
+}
+
+void KeyFrame::SetSPVocabulary(SPVocabulary *pSPVoc)
+{
+    mpSPvocabulary = pSPVoc;
+}
+
 void KeyFrame::SetPose(const Sophus::SE3f &Tcw)
 {
     unique_lock<mutex> lock(mMutexPose);

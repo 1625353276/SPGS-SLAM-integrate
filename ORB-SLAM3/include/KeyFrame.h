@@ -21,9 +21,13 @@
 #define KEYFRAME_H
 
 #include "MapPoint.h"
-#include "Thirdparty/DBoW2/DBoW2/BowVector.h"
-#include "Thirdparty/DBoW2/DBoW2/FeatureVector.h"
+// #include "Thirdparty/DBoW2/DBoW2/BowVector.h"
+// #include "Thirdparty/DBoW2/DBoW2/FeatureVector.h"
+#include "Thirdparty/DBoW3/src/DBoW3.h"
+#include "Thirdparty/DBoW3/src/BowVector.h"
+#include "Thirdparty/DBoW3/src/FeatureVector.h"
 #include "ORBVocabulary.h"
+#include "SPVocabulary.h"
 #include "ORBextractor.h"
 #include "Frame.h"
 #include "KeyFrameDatabase.h"
@@ -217,6 +221,15 @@ public:
     // Bag of Words Representation
     void ComputeBoW();
 
+    // Compute Bag of Words representation for SuperPoint.
+    void ComputeBoW3();
+
+    // Binarize SuperPoint descriptors
+    void binarize_descriptors();
+
+    // Set SuperPoint vocabulary
+    void SetSPVocabulary(SPVocabulary *pSPVoc);
+
     // Covisibility graph functions
     void AddConnection(KeyFrame* pKF, const int &weight);
     void EraseConnection(KeyFrame* pKF);
@@ -386,9 +399,19 @@ public:
     const std::vector<float> mvDepth; // negative value for monocular points
     const cv::Mat mDescriptors;
 
+    // SuperPoint vocabulary
+    SPVocabulary* mpSPvocabulary;
+
+    // Binarized descriptors for SuperPoint
+    cv::Mat mDescriptors_bin;
+
     //BoW
-    DBoW2::BowVector mBowVec;
-    DBoW2::FeatureVector mFeatVec;
+    DBoW3::BowVector mBowVec;
+    DBoW3::FeatureVector mFeatVec;
+
+    // SuperPoint BoW
+    DBoW3::BowVector mBow3Vec;
+    DBoW3::FeatureVector mFeat3Vec;
 
     // Pose relative to parent (this is computed when bad flag is activated)
     Sophus::SE3f mTcp;

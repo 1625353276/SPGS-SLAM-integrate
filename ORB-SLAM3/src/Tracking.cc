@@ -41,9 +41,9 @@ namespace ORB_SLAM3
 {
 
 
-Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer, MapDrawer *pMapDrawer, Atlas *pAtlas, KeyFrameDatabase* pKFDB, const string &strSettingPath, const int sensor, Settings* settings, const string &_nameSeq):
+Tracking::Tracking(System *pSys, SPVocabulary* pVoc, FrameDrawer *pFrameDrawer, MapDrawer *pMapDrawer, Atlas *pAtlas, KeyFrameDatabase* pKFDB, const string &strSettingPath, const int sensor, Settings* settings, const string &_nameSeq):
     mState(NO_IMAGES_YET), mSensor(sensor), mTrackedFr(0), mbStep(false),
-    mbOnlyTracking(false), mbMapUpdated(false), mbVO(false), mpORBVocabulary(pVoc), mpKeyFrameDB(pKFDB),
+    mbOnlyTracking(false), mbMapUpdated(false), mbVO(false), mpSPVocabulary(pVoc), mpKeyFrameDB(pKFDB),
     mbReadyToInitializate(false), mpSystem(pSys), mpViewer(NULL), bStepByStep(false),
     mpFrameDrawer(pFrameDrawer), mpMapDrawer(pMapDrawer), mpAtlas(pAtlas), mnLastRelocFrameId(0), time_recently_lost(5.0),
     mnInitialFrameId(0), mbCreatedMap(false), mnFirstFrameId(0), mpCamera2(nullptr), mpLastKeyFrame(static_cast<KeyFrame*>(NULL))
@@ -1529,13 +1529,13 @@ Sophus::SE3f Tracking::GrabImageStereo(const cv::Mat &imRectLeft, const cv::Mat 
     //cout << "Incoming frame creation" << endl;
 
     if (mSensor == System::STEREO && !mpCamera2)
-        mCurrentFrame = Frame(mImGray,imGrayRight,mImRGB,imRightRGB,timestamp,mpORBextractorLeft,mpORBextractorRight,mpORBVocabulary,mK,mDistCoef,mbf,mThDepth,mpCamera);
+        mCurrentFrame = Frame(mImGray,imGrayRight,mImRGB,imRightRGB,timestamp,mpORBextractorLeft,mpORBextractorRight,mpSPVocabulary,mK,mDistCoef,mbf,mThDepth,mpCamera);
     else if(mSensor == System::STEREO && mpCamera2)
-        mCurrentFrame = Frame(mImGray,imGrayRight,timestamp,mpORBextractorLeft,mpORBextractorRight,mpORBVocabulary,mK,mDistCoef,mbf,mThDepth,mpCamera,mpCamera2,mTlr);
+        mCurrentFrame = Frame(mImGray,imGrayRight,timestamp,mpORBextractorLeft,mpORBextractorRight,mpSPVocabulary,mK,mDistCoef,mbf,mThDepth,mpCamera,mpCamera2,mTlr);
     else if(mSensor == System::IMU_STEREO && !mpCamera2)
-        mCurrentFrame = Frame(mImGray,imGrayRight,mImRGB,imRightRGB,timestamp,mpORBextractorLeft,mpORBextractorRight,mpORBVocabulary,mK,mDistCoef,mbf,mThDepth,mpCamera,&mLastFrame,*mpImuCalib);
+        mCurrentFrame = Frame(mImGray,imGrayRight,mImRGB,imRightRGB,timestamp,mpORBextractorLeft,mpORBextractorRight,mpSPVocabulary,mK,mDistCoef,mbf,mThDepth,mpCamera,&mLastFrame,*mpImuCalib);
     else if(mSensor == System::IMU_STEREO && mpCamera2)
-        mCurrentFrame = Frame(mImGray,imGrayRight,timestamp,mpORBextractorLeft,mpORBextractorRight,mpORBVocabulary,mK,mDistCoef,mbf,mThDepth,mpCamera,mpCamera2,mTlr,&mLastFrame,*mpImuCalib);
+        mCurrentFrame = Frame(mImGray,imGrayRight,timestamp,mpORBextractorLeft,mpORBextractorRight,mpSPVocabulary,mK,mDistCoef,mbf,mThDepth,mpCamera,mpCamera2,mTlr,&mLastFrame,*mpImuCalib);
 
     //cout << "Incoming frame ended" << endl;
 
@@ -1611,9 +1611,9 @@ Sophus::SE3f Tracking::GrabImageRGBD(const cv::Mat &imRGB, const cv::Mat &imD, c
         imDepth.convertTo(imDepth,CV_32F,mDepthMapFactor);
 
     if (mSensor == System::RGBD)
-        mCurrentFrame = Frame(mImGray,imDepth,mImRGB,timestamp,mpORBextractorLeft,mpORBVocabulary,mK,mDistCoef,mbf,mThDepth,mpCamera, undistorted_RGB);
+        mCurrentFrame = Frame(mImGray,imDepth,mImRGB,timestamp,mpORBextractorLeft,mpSPVocabulary,mK,mDistCoef,mbf,mThDepth,mpCamera, undistorted_RGB);
     else if(mSensor == System::IMU_RGBD)
-        mCurrentFrame = Frame(mImGray,imDepth,mImRGB,timestamp,mpORBextractorLeft,mpORBVocabulary,mK,mDistCoef,mbf,mThDepth,mpCamera, undistorted_RGB, &mLastFrame,*mpImuCalib);
+        mCurrentFrame = Frame(mImGray,imDepth,mImRGB,timestamp,mpORBextractorLeft,mpSPVocabulary,mK,mDistCoef,mbf,mThDepth,mpCamera, undistorted_RGB, &mLastFrame,*mpImuCalib);
     //mCurrentFrame后续在track中会用到
 
 
@@ -1686,18 +1686,18 @@ Sophus::SE3f Tracking::GrabImageMonocular(const cv::Mat &im, const double &times
     if (mSensor == System::MONOCULAR)
     {
         if(mState==NOT_INITIALIZED || mState==NO_IMAGES_YET ||(lastID - initID) < mMaxFrames)
-            mCurrentFrame = Frame(mImGray,mImRGB,timestamp,mpIniORBextractor,mpORBVocabulary,mpCamera, mDistCoef, mbf,mThDepth, undistorted_RGB);
+            mCurrentFrame = Frame(mImGray,mImRGB,timestamp,mpIniORBextractor,mpSPVocabulary,mpCamera, mDistCoef, mbf,mThDepth, undistorted_RGB);
         else
-            mCurrentFrame = Frame(mImGray,mImRGB,timestamp,mpORBextractorLeft,mpORBVocabulary,mpCamera,mDistCoef,mbf,mThDepth, undistorted_RGB);
+            mCurrentFrame = Frame(mImGray,mImRGB,timestamp,mpORBextractorLeft,mpSPVocabulary,mpCamera,mDistCoef,mbf,mThDepth, undistorted_RGB);
     }
     else if(mSensor == System::IMU_MONOCULAR)
     {
         if(mState==NOT_INITIALIZED || mState==NO_IMAGES_YET)
         {
-            mCurrentFrame = Frame(mImGray,mImRGB,timestamp,mpIniORBextractor,mpORBVocabulary,mpCamera,mDistCoef,mbf,mThDepth, undistorted_RGB, &mLastFrame,*mpImuCalib);
+            mCurrentFrame = Frame(mImGray,mImRGB,timestamp,mpIniORBextractor,mpSPVocabulary,mpCamera,mDistCoef,mbf,mThDepth, undistorted_RGB, &mLastFrame,*mpImuCalib);
         }
         else
-            mCurrentFrame = Frame(mImGray,mImRGB,timestamp,mpORBextractorLeft,mpORBVocabulary,mpCamera,mDistCoef,mbf,mThDepth, undistorted_RGB, &mLastFrame,*mpImuCalib);
+            mCurrentFrame = Frame(mImGray,mImRGB,timestamp,mpORBextractorLeft,mpSPVocabulary,mpCamera,mDistCoef,mbf,mThDepth, undistorted_RGB, &mLastFrame,*mpImuCalib);
     }
 
     if (mState==NO_IMAGES_YET)

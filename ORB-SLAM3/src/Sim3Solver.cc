@@ -174,7 +174,7 @@ Eigen::Matrix4f Sim3Solver::iterate(int nIterations, bool &bNoMore, vector<bool>
         // Get min set of points
         for(short i = 0; i < 3; ++i)
         {
-            int randi = DUtils::Random::RandomInt(0, vAvailableIndices.size()-1);
+            int randi = rand() % ((vAvailableIndices.size()-1) - (0) + 1) + (0);
 
             int idx = vAvailableIndices[randi];
 
@@ -247,7 +247,7 @@ Eigen::Matrix4f Sim3Solver::iterate(int nIterations, bool &bNoMore, vector<bool>
         // Get min set of points
         for(short i = 0; i < 3; ++i)
         {
-            int randi = DUtils::Random::RandomInt(0, vAvailableIndices.size()-1);
+            int randi = rand() % ((vAvailableIndices.size()-1) - (0) + 1) + (0);
 
             int idx = vAvailableIndices[randi];
 
