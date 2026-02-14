@@ -1,0 +1,313 @@
+<project_specification>
+  <project_name>SPGS-SLAM - SuperPoint + Gaussian Splatting SLAM</project_name>
+  
+  <overview>
+    SPGS-SLAM is a real-time visual SLAM system that combines:
+    - Frontend: Rover-SLAM with SuperPoint feature extraction (using ONNX Runtime)
+    - Backend: SEGS-SLAM with 3D Gaussian Splatting rendering
+    
+    The system uses a Pull-Based integration mode where GaussianMapper (backend thread)
+    actively pulls data from ORB-SLAM3's Atlas map system, ensuring thread-safe
+    data access using mutex locks.
+    
+    Current status: The project has completed architecture research, code copying,
+    CMake configuration, and DBoW3 integration. All dependencies are installed
+    and the project compiles successfully.
+  </overview>
+  
+  <technology_stack>
+    <language>C++17</language>
+    <build_system>CMake 3.x</build_system>
+    <core_frameworks>
+      <orb_slam3>ORB-SLAM3 for tracking, local mapping, and loop closing</orb_slam3>
+      <libtorch>PyTorch C++ 2.0.1+cu118 for Gaussian optimization</libtorch>
+      <pcl>Point Cloud Library for 3D data processing</pcl>
+      <cuda>CUDA 11.8 for GPU acceleration</cuda>
+    </core_frameworks>
+    <feature_extraction>
+      <superpoint>SuperPoint feature extractor via ONNX Runtime 1.16.3</superpoint>
+      <dbow3>DBoW3 for bag-of-words vocabulary matching</dbow3>
+    </feature_extraction>
+    <rendering>
+      <opengl>OpenGL 4.x for Gaussian rasterization</opengl>
+      <glfw>GLFW for window management</glfw>
+      <glm>GLM for 3D math</glm>
+      <pangolin>Pangolin for visualization</pangolin>
+    </rendering>
+    <dependencies>
+      <opencv>OpenCV 4.7.0 with CUDA support</opencv>
+      <eigen3>Eigen3 for linear algebra</eigen3>
+      <boost>Boost for serialization and utilities</boost>
+      <sophus>Sophus for geometric transformations</sophus>
+      <torch_scatter>TorchScatter 2.1.2 for efficient scatter operations</torch_scatter>
+    </dependencies>
+  </technology_stack>
+  
+  <architecture>
+    <main_components>
+      <frontend_rover_slam>
+        <tracking_thread>
+          - TrackMonocular(): Main tracking loop
+          - SPextractor: SuperPoint feature extraction
+          - Frame: Single frame representation
+          - KeyFrame: Keyframe management
+        </tracking_thread>
+        <local_mapping_thread>
+          - KeyFrame insertion and culling
+          - MapPoint creation and fusion
+          - Local bundle adjustment
+        </local_mapping_thread>
+        <loop_closing_thread>
+          - Loop detection using DBoW3
+          - Loop correction and optimization
+          - Global bundle adjustment
+        </loop_closing_thread>
+        <atlas>
+          - Multi-map management
+          - Map switching and merging
+          - GetCurrentMap(): Get active map
+        </atlas>
+      </frontend_rover_slam>
+      
+      <backend_segs_slam>
+        <gaussian_mapper_thread>
+          - Pull-Based data access from Atlas
+          - GaussianModel: 3D Gaussian representation
+          - GaussianScene: Scene graph management
+          - GaussianRenderer: CUDA rasterization
+          - Training loop with PyTorch optimization
+        </gaussian_mapper_thread>
+        <gaussian_model>
+          - Anchor points (3D positions)
+          - Scaling and rotation parameters
+          - Opacity and color
+          - MLP networks for appearance
+        </gaussian_model>
+        <viewer>
+          - ImGui-based visualization
+          - Real-time rendering
+          - Interactive camera controls
+        </viewer>
+      </backend_segs_slam>
+    </main_components>
+    
+    <integration_mode>Pull-Based</integration_mode>
+    <description>
+      GaussianMapper actively pulls data from ORB-SLAM3's Atlas:
+      1. Check if minimum KFs threshold met (15 KFs)
+      2. Lock map with mMutexMapUpdate
+      3. Get all KeyFrames and MapPoints
+      4. Extract 3D positions and colors
+      5. Cache points in GaussianScene
+      6. Unlock and train for one iteration
+    </description>
+  </architecture>
+  
+  <project_structure>
+    <directories>
+      <root>/home/ubuntu/SPGS-SLAM/</root>
+      <orb_slam3>ORB-SLAM3/ - ORB-SLAM3 source with SuperPoint integration</orb_slam3>
+      <include>include/ - Gaussian-related headers</include>
+      <src>src/ - Gaussian source files</src>
+      <cuda_rasterizer>cuda_rasterizer/ - CUDA rasterization kernels</cuda_rasterizer>
+      <third_party>third_party/ - simple-knn, tinyply, colmap</third_party>
+      <viewer>viewer/ - ImGui viewer</viewer>
+      <cfg>cfg/ - Configuration files</cfg>
+      <examples>examples/ - Example programs</examples>
+      <bin>bin/ - Compiled executables</bin>
+      <lib>lib/ - Compiled libraries</lib>
+    </directories>
+  </project_structure>
+  
+  <current_status>
+    <completed>
+      <item>Architecture research (Rover-SLAM, SEGS-SLAM, integration strategy)</item>
+      <item>Code copying from SEGS-SLAM (Gaussian mapper, renderer, model)</item>
+      <item>Code copying from Rover-SLAM (SuperPoint extractor, matcher)</item>
+      <item>CMakeLists.txt configuration (all dependencies added)</item>
+      <item>C++17 compatibility fixes (exception specifications, types)</item>
+      <item>DBoW3 integration (complete DBoW2 removal)</item>
+      <item>Successful compilation of all targets</item>
+    </completed>
+    <pending>
+      <item>SuperPoint extractor integration in Tracking</item>
+      <item>Configuration file creation</item>
+      <item>GaussianMapper integration with ORB-SLAM3 System</item>
+      <item>Main program implementation</item>
+      <item>Functional testing</item>
+    </pending>
+  </current_status>
+  
+  <implementation_phases>
+    <phase number="1" priority="HIGH">
+      <title>SuperPoint Integration in Tracking</title>
+      <description>Integrate SPextractor into the ORB-SLAM3 Tracking system</description>
+      <tasks>
+        <task>1. Modify Tracking.h to add SPextractor* member variables</task>
+        <task>2. Modify Tracking.cc constructor to initialize SPextractor</task>
+        <task>3. Modify Frame.h to support both ORB and SuperPoint features</task>
+        <task>4. Implement ExtractKeyPoints method in Frame.cc</task>
+        <task>5. Update System.cc to load SuperPoint vocabulary</task>
+        <task>6. Test compilation after each change</task>
+      </tasks>
+    </phase>
+    
+    <phase number="2" priority="HIGH">
+      <title>Configuration Files</title>
+      <description>Create configuration files for SuperPoint and Gaussian Mapper</description>
+      <tasks>
+        <task>1. Create SuperPoint configuration YAML</task>
+        <task>2. Configure SuperPoint model path</task>
+        <task>3. Configure feature extraction parameters</task>
+        <task>4. Configure vocabulary file path</task>
+        <task>5. Create Gaussian mapper configuration YAML</task>
+        <task>6. Configure training parameters</task>
+      </tasks>
+    </phase>
+    
+    <phase number="3" priority="HIGH">
+      <title>GaussianMapper Integration</title>
+      <description>Integrate GaussianMapper with ORB-SLAM3 System</description>
+      <tasks>
+        <task>1. Create SPGSSystem wrapper class</task>
+        <task>2. Implement System::GetAtlas() interface</task>
+        <task>3. Implement GaussianMapper initialization</task>
+        <task>4. Implement Pull-Based data access in GaussianMapper::run()</task>
+        <task>5. Add mutex protection for data access</task>
+        <task>6. Test data flow from ORB-SLAM3 to GaussianMapper</task>
+      </tasks>
+    </phase>
+    
+    <phase number="4" priority="MEDIUM">
+      <title>Main Program Implementation</title>
+      <description>Create example programs for testing</description>
+      <tasks>
+        <task>1. Create vicon_mono.cpp example</task>
+        <task>2. Implement main loop with System and GaussianMapper</task>
+        <task>3. Add thread management</task>
+        <task>4. Add error handling and cleanup</task>
+        <task>5. Create command-line argument parsing</task>
+      </tasks>
+    </phase>
+    
+    <phase number="5" priority="MEDIUM">
+      <title>Functional Testing</title>
+      <description>Test the complete system</description>
+      <tasks>
+        <task>1. Test SuperPoint feature extraction</task>
+        <task>2. Test ORB-SLAM3 tracking with SuperPoint</task>
+        <task>3. Test GaussianMapper data pulling</task>
+        <task>4. Test Gaussian model training</task>
+        <task>5. Test rendering and visualization</task>
+        <task>6. End-to-end test on sample dataset</task>
+      </tasks>
+    </phase>
+  </implementation_phases>
+  
+  <key_files>
+    <file path="ORB-SLAM3/include/Tracking.h">Tracking class header</file>
+    <file path="ORB-SLAM3/src/Tracking.cc">Tracking implementation</file>
+    <file path="ORB-SLAM3/include/Frame.h">Frame class header</file>
+    <file path="ORB-SLAM3/src/Frame.cc">Frame implementation</file>
+    <file path="ORB-SLAM3/include/Extractors/SPextractor.h">SuperPoint extractor</file>
+    <file path="ORB-SLAM3/src/Extractors/SPextractor.cc">SuperPoint implementation</file>
+    <file path="include/gaussian_mapper.h">Gaussian mapper header</file>
+    <file path="src/gaussian_mapper.cc">Gaussian mapper implementation</file>
+    <file path="CMakeLists.txt">Build configuration</file>
+    <file path="build.sh">Build script</file>
+  </key_files>
+  
+  <success_criteria>
+    <compilation>
+      <item>All targets compile without errors</item>
+      <item>No warnings (except acceptable ones)</item>
+      <item>Correct linking of all libraries</item>
+    </compilation>
+    <functionality>
+      <item>SuperPoint features extracted correctly</item>
+      <item>Tracking works with SuperPoint features</item>
+      <item>Loop closure detection works with DBoW3</item>
+      <item>GaussianMapper pulls data from Atlas</item>
+      <item>3D Gaussian model trains successfully</item>
+      <item>Rendering displays correctly</item>
+    </functionality>
+    <performance>
+      <item>Real-time tracking (>30 FPS)</item>
+      <item>Gaussian training completes in reasonable time</item>
+      <item>Memory usage within acceptable limits</item>
+      <item>No memory leaks</item>
+    </performance>
+  </success_criteria>
+  
+  <testing_strategy>
+    <unit_tests>
+      <item>Test SPextractor with sample images</item>
+      <item>Test DBoW3 vocabulary loading</item>
+      <item>Test GaussianModel parameter initialization</item>
+    </unit_tests>
+    <integration_tests>
+      <item>Test Tracking with SuperPoint features</item>
+      <item>Test GaussianMapper data access</item>
+      <item>Test complete pipeline end-to-end</item>
+    </integration_tests>
+    <performance_tests>
+      <item>Measure tracking FPS</item>
+      <item>Measure training iteration time</item>
+      <item>Profile memory usage</item>
+    </performance_tests>
+  </testing_strategy>
+  
+  <development_guidelines>
+    <code_style>
+      <item>Follow existing code style in SPGS-SLAM</item>
+      <item>Use meaningful variable names</item>
+      <item>Add comments for complex logic</item>
+      <item>Keep functions focused and small</item>
+    </code_style>
+    <version_control>
+      <item>Commit after each major feature</item>
+      <item>Write descriptive commit messages</item>
+      <item>Use feature branches for large changes</item>
+      <item>Tag releases</item>
+    </version_control>
+    <testing>
+      <item>Test after each compilation</item>
+      <item>Test incrementally, not all at once</item>
+      <item>Fix bugs before proceeding</item>
+      <item>Document test procedures</item>
+    </testing>
+  </development_guidelines>
+  
+  <known_issues>
+    <issue>
+      <description>SuperPoint extractor integration not yet completed</description>
+      <status>PENDING</status>
+      <priority>HIGH</priority>
+    </issue>
+    <issue>
+      <description>Configuration files need to be created</description>
+      <status>PENDING</status>
+      <priority>HIGH</priority>
+    </issue>
+    <issue>
+      <description>GaussianMapper integration with System pending</description>
+      <status>PENDING</status>
+      <priority>HIGH</priority>
+    </issue>
+  </known_issues>
+  
+  <reference_material>
+    <item>Rover-SLAM source: /home/ubuntu/Rover-SLAM/</item>
+    <item>SEGS-SLAM source: /home/ubuntu/SEGS-SLAM/</item>
+    <item>Development status: /home/ubuntu/SPGS-SLAM/开发状态.md</item>
+    <item>Development guidelines: /home/ubuntu/SPGS-SLAM/开发规范.md</item>
+  </reference_material>
+  
+  <notes>
+    <note>Project follows strict development guidelines: all changes must be reviewed by user before implementation</note>
+    <note>Each test command must be reviewed by user before execution (some tests take long time)</note>
+    <note>Use incremental development approach: one feature at a time, test thoroughly</note>
+    <note>Thread safety is critical: always use mutex locks when accessing shared data</note>
+    <note>Pull-Based integration is preferred over push-based for better decoupling</note>
+  </notes>
+</project_specification>
