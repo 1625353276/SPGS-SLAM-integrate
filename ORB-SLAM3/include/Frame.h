@@ -58,6 +58,7 @@ class KeyFrame;
 class ConstraintPoseImu;
 class GeometricCamera;
 class ORBextractor;
+class SPextractor;
 
 class Frame
 {
@@ -76,11 +77,26 @@ public:
     // Constructor for Monocular cameras.
     Frame(const cv::Mat &imGray, const cv::Mat &imRGB, const double &timeStamp, ORBextractor* extractor,ORBVocabulary* voc, GeometricCamera* pCamera, cv::Mat &distCoef, const float &bf, const float &thDepth, const cv::Mat &undistorted_img, Frame* pPrevF = static_cast<Frame*>(NULL), const IMU::Calib &ImuCalib = IMU::Calib());
 
+    // Constructor for stereo cameras with SuperPoint.
+    Frame(const cv::Mat &imLeft, const cv::Mat &imRight, const cv::Mat &imRGB, const cv::Mat &imRightRGB, const double &timeStamp, SPextractor* extractorLeft, SPextractor* extractorRight, SPVocabulary* voc, cv::Mat &K, cv::Mat &distCoef, const float &bf, const float &thDepth, GeometricCamera* pCamera,Frame* pPrevF = static_cast<Frame*>(NULL), const IMU::Calib &ImuCalib = IMU::Calib());
+
+    // Constructor for stereo cameras with SuperPoint and dual camera support.
+    Frame(const cv::Mat &imLeft, const cv::Mat &imRight, const double &timeStamp, SPextractor* extractorLeft, SPextractor* extractorRight, SPVocabulary* voc, cv::Mat &K, cv::Mat &distCoef, const float &bf, const float &thDepth, GeometricCamera* pCamera, GeometricCamera* pCamera2, Sophus::SE3f& Tlr,Frame* pPrevF = static_cast<Frame*>(NULL), const IMU::Calib &ImuCalib = IMU::Calib());
+
+    // Constructor for RGB-D cameras with SuperPoint.
+    Frame(const cv::Mat &imGray, const cv::Mat &imDepth, const cv::Mat &imRGB, const double &timeStamp, SPextractor* extractor, SPVocabulary* voc, cv::Mat &K, cv::Mat &distCoef, const float &bf, const float &thDepth, GeometricCamera* pCamera, const cv::Mat &undistorted_img, Frame* pPrevF = static_cast<Frame*>(NULL), const IMU::Calib &ImuCalib = IMU::Calib());
+
+    // Constructor for Monocular cameras with SuperPoint.
+    Frame(const cv::Mat &imGray, const cv::Mat &imRGB, const double &timeStamp, SPextractor* extractor, SPVocabulary* voc, GeometricCamera* pCamera, cv::Mat &distCoef, const float &bf, const float &thDepth, const cv::Mat &undistorted_img, Frame* pPrevF = static_cast<Frame*>(NULL), const IMU::Calib &ImuCalib = IMU::Calib());
+
     // Destructor
     // ~Frame();
 
     // Extract ORB on the image. 0 for left image and 1 for right image.
     void ExtractORB(int flag, const cv::Mat &im, const int x0, const int x1);
+
+    // Extract SuperPoint key points. 0 for left image and 1 for right image.
+    void ExtractKeyPoints(int flag, const cv::Mat &im, const int x0, const int x1);
 
     // Compute Bag of Words representation.
     void ComputeBoW();
@@ -209,6 +225,7 @@ public:
 
     // Feature extractor. The right is used only in the stereo case.
     ORBextractor* mpORBextractorLeft, *mpORBextractorRight;
+    SPextractor* mpExtractorLeft, *mpExtractorRight;
 
     // Frame timestamp.
     double mTimeStamp;

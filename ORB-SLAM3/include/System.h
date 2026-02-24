@@ -220,8 +220,8 @@ private:
     // Input sensor
     eSensor mSensor;
 
-    // ORB vocabulary used for place recognition and feature matching.
-    ORBVocabulary* mpVocabulary;
+    // SuperPoint vocabulary used for place recognition and feature matching.
+    SPVocabulary* mpVocabulary;
 
     // KeyFrame database for place recognition (relocalization and loop detection).
     KeyFrameDatabase* mpKeyFrameDatabase;

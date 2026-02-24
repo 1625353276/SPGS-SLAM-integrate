@@ -34,6 +34,7 @@
 #include "SPVocabulary.h"
 #include "KeyFrameDatabase.h"
 #include "ORBextractor.h"
+#include "Extractors/SPextractor.h"
 #include "MapDrawer.h"
 #include "System.h"
 #include "ImuTypes.h"
@@ -264,6 +265,10 @@ protected:
     //ORB
     ORBextractor* mpORBextractorLeft, *mpORBextractorRight;
     ORBextractor* mpIniORBextractor;
+
+    //SuperPoint
+    SPextractor* mpExtractorLeft, *mpExtractorRight;
+    SPextractor* mpIniExtractor;
 
     //BoW
     SPVocabulary* mpSPVocabulary;

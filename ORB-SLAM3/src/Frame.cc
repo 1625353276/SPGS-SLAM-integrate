@@ -22,6 +22,7 @@
 #include "MapPoint.h"
 #include "KeyFrame.h"
 #include "ORBextractor.h"
+#include "Extractors/SPextractor.h"
 #include "Converter.h"
 #include "ORBmatcher.h"
 #include "GeometricCamera.h"
@@ -205,6 +206,112 @@ Frame::Frame(const cv::Mat &imLeft, const cv::Mat &imRight, const cv::Mat &imRGB
     AssignFeaturesToGrid();
 }
 
+
+// Constructor for stereo cameras with SuperPoint
+Frame::Frame(const cv::Mat &imLeft, const cv::Mat &imRight, const cv::Mat &imRGB, const cv::Mat &imRightRGB, const double &timeStamp, SPextractor* extractorLeft, SPextractor* extractorRight, SPVocabulary* voc, cv::Mat &K, cv::Mat &distCoef, const float &bf, const float &thDepth, GeometricCamera* pCamera, Frame* pPrevF, const IMU::Calib &ImuCalib)
+    :mpcpi(NULL), mpSPvocabulary(voc),mpExtractorLeft(extractorLeft),mpExtractorRight(extractorRight), mTimeStamp(timeStamp), mK(K.clone()), mK_(Converter::toMatrix3f(K)), mDistCoef(distCoef.clone()), mbf(bf), mThDepth(thDepth),
+     mImuCalib(ImuCalib), mpImuPreintegrated(NULL), mpPrevFrame(pPrevF),mpImuPreintegratedFrame(NULL), mpReferenceKF(static_cast<KeyFrame*>(NULL)), mbIsSet(false), mbImuPreintegrated(false),
+     mpCamera(pCamera) ,mpCamera2(nullptr), mbHasPose(false), mbHasVelocity(false)
+{
+    // Frame ID
+    mnId=nNextId++;
+
+    // Save RGB image for Gaussian Mapping
+    this->imgLeftRGB = imRGB.clone();
+    this->imgAuxiliary = imRightRGB.clone();
+
+    // Scale Level Info
+    mnScaleLevels = mpExtractorLeft->GetLevels();
+    mfScaleFactor = mpExtractorLeft->GetScaleFactor();
+    mfLogScaleFactor = log(mfScaleFactor);
+    mvScaleFactors = mpExtractorLeft->GetScaleFactors();
+    mvInvScaleFactors = mpExtractorLeft->GetInverseScaleFactors();
+    mvLevelSigma2 = mpExtractorLeft->GetScaleSigmaSquares();
+    mvInvLevelSigma2 = mpExtractorLeft->GetInverseScaleSigmaSquares();
+
+    // SuperPoint extraction
+#ifdef REGISTER_TIMES
+    std::chrono::steady_clock::time_point time_StartExtORB = std::chrono::steady_clock::now();
+#endif
+    thread threadLeft(&Frame::ExtractKeyPoints,this,0,imLeft,0,0);
+    thread threadRight(&Frame::ExtractKeyPoints,this,1,imRight,0,0);
+    threadLeft.join();
+    threadRight.join();
+#ifdef REGISTER_TIMES
+    std::chrono::steady_clock::time_point time_EndExtORB = std::chrono::steady_clock::now();
+
+    mTimeORB_Ext = std::chrono::duration_cast<std::chrono::duration<double,std::milli> >(time_EndExtORB - time_StartExtORB).count();
+#endif
+
+    N = mvKeys.size();
+    if(mvKeys.empty())
+        return;
+
+    UndistortKeyPoints();
+
+#ifdef REGISTER_TIMES
+    std::chrono::steady_clock::time_point time_StartStereoMatches = std::chrono::steady_clock::now();
+#endif
+    ComputeStereoMatches();
+#ifdef REGISTER_TIMES
+    std::chrono::steady_clock::time_point time_EndStereoMatches = std::chrono::steady_clock::now();
+
+    mTimeStereoMatch = std::chrono::duration_cast<std::chrono::duration<double,std::milli> >(time_EndStereoMatches - time_StartStereoMatches).count();
+#endif
+
+    mvpMapPoints = vector<MapPoint*>(N,static_cast<MapPoint*>(NULL));
+    mvbOutlier = vector<bool>(N,false);
+    mmProjectPoints.clear();
+    mmMatchedInImage.clear();
+
+
+    // This is done only for the first Frame (or after a change in the calibration)
+    if(mbInitialComputations)
+    {
+        ComputeImageBounds(imLeft);
+
+        mfGridElementWidthInv=static_cast<float>(FRAME_GRID_COLS)/(mnMaxX-mnMinX);
+        mfGridElementHeightInv=static_cast<float>(FRAME_GRID_ROWS)/(mnMaxY-mnMinY);
+
+
+
+        fx = K.at<float>(0,0);
+        fy = K.at<float>(1,1);
+        cx = K.at<float>(0,2);
+        cy = K.at<float>(1,2);
+        invfx = 1.0f/fx;
+        invfy = 1.0f/fy;
+
+        mbInitialComputations=false;
+    }
+
+    mb = mbf/fx;
+
+    if(pPrevF)
+    {
+        if(pPrevF->HasVelocity())
+            SetVelocity(pPrevF->GetVelocity());
+    }
+    else
+    {
+        mVw.setZero();
+    }
+
+    mpMutexImu = new std::mutex();
+
+    //Set no stereo fisheye information
+    Nleft = -1;
+    Nright = -1;
+    mvLeftToRightMatch = vector<int>(0);
+    mvRightToLeftMatch = vector<int>(0);
+    mvStereo3Dpoints = vector<Eigen::Vector3f>(0);
+    monoLeft = -1;
+    monoRight = -1;
+
+    AssignFeaturesToGrid();
+}
+
+
 Frame::Frame(const cv::Mat &imGray, const cv::Mat &imDepth, const cv::Mat &imRGB, const double &timeStamp, ORBextractor* extractor,ORBVocabulary* voc, cv::Mat &K, cv::Mat &distCoef, const float &bf, const float &thDepth, GeometricCamera* pCamera, const cv::Mat &undistorted_img, Frame* pPrevF, const IMU::Calib &ImuCalib)
     :mpcpi(NULL),mpORBvocabulary(voc),mpORBextractorLeft(extractor),mpORBextractorRight(static_cast<ORBextractor*>(NULL)),
      mTimeStamp(timeStamp), mK(K.clone()), mK_(Converter::toMatrix3f(K)),mDistCoef(distCoef.clone()), mbf(bf), mThDepth(thDepth),
@@ -235,6 +342,103 @@ Frame::Frame(const cv::Mat &imGray, const cv::Mat &imDepth, const cv::Mat &imRGB
     std::chrono::steady_clock::time_point time_StartExtORB = std::chrono::steady_clock::now();
 #endif
     ExtractORB(0,imGray,0,0);//特征提取
+#ifdef REGISTER_TIMES
+    std::chrono::steady_clock::time_point time_EndExtORB = std::chrono::steady_clock::now();
+
+    mTimeORB_Ext = std::chrono::duration_cast<std::chrono::duration<double,std::milli> >(time_EndExtORB - time_StartExtORB).count();
+#endif
+
+
+    N = mvKeys.size();
+
+    if(mvKeys.empty())
+        return;
+
+    UndistortKeyPoints();
+
+    ComputeStereoFromRGBD(imDepth);//暂时不知道这里干了啥
+
+    mvpMapPoints = vector<MapPoint*>(N,static_cast<MapPoint*>(NULL));
+
+    mmProjectPoints.clear();
+    mmMatchedInImage.clear();
+
+    mvbOutlier = vector<bool>(N,false);
+
+    // This is done only for the first Frame (or after a change in the calibration)
+    if(mbInitialComputations)
+    {
+        ComputeImageBounds(imGray);
+
+        mfGridElementWidthInv=static_cast<float>(FRAME_GRID_COLS)/static_cast<float>(mnMaxX-mnMinX);
+        mfGridElementHeightInv=static_cast<float>(FRAME_GRID_ROWS)/static_cast<float>(mnMaxY-mnMinY);
+
+        fx = K.at<float>(0,0);
+        fy = K.at<float>(1,1);
+        cx = K.at<float>(0,2);
+        cy = K.at<float>(1,2);
+        invfx = 1.0f/fx;
+        invfy = 1.0f/fy;
+
+        mbInitialComputations=false;
+    }
+
+    mb = mbf/fx;
+
+    if(pPrevF){
+        if(pPrevF->HasVelocity())
+            SetVelocity(pPrevF->GetVelocity());
+    }
+    else{
+        mVw.setZero();
+    }
+
+    mpMutexImu = new std::mutex();
+
+    //Set no stereo fisheye information
+    Nleft = -1;
+    Nright = -1;
+    mvLeftToRightMatch = vector<int>(0);
+    mvRightToLeftMatch = vector<int>(0);
+    mvStereo3Dpoints = vector<Eigen::Vector3f>(0);
+    monoLeft = -1;
+    monoRight = -1;
+
+    AssignFeaturesToGrid();
+}
+
+
+// Constructor for RGB-D cameras with SuperPoint
+Frame::Frame(const cv::Mat &imGray, const cv::Mat &imDepth, const cv::Mat &imRGB, const double &timeStamp, SPextractor* extractor, SPVocabulary* voc, cv::Mat &K, cv::Mat &distCoef, const float &bf, const float &thDepth, GeometricCamera* pCamera, const cv::Mat &undistorted_img, Frame* pPrevF, const IMU::Calib &ImuCalib)
+    :mpcpi(NULL),mpSPvocabulary(voc),mpExtractorLeft(extractor),mpExtractorRight(static_cast<SPextractor*>(NULL)),
+     mTimeStamp(timeStamp), mK(K.clone()), mK_(Converter::toMatrix3f(K)),mDistCoef(distCoef.clone()), mbf(bf), mThDepth(thDepth),
+     mImuCalib(ImuCalib), mpImuPreintegrated(NULL), mpPrevFrame(pPrevF), mpImuPreintegratedFrame(NULL), mpReferenceKF(static_cast<KeyFrame*>(NULL)), mbIsSet(false), mbImuPreintegrated(false),
+     mpCamera(pCamera),mpCamera2(nullptr), mbHasPose(false), mbHasVelocity(false)
+{
+    // Frame ID
+    mnId=nNextId++;
+
+    // std::cout << "Frame ID :" << mnId << std::endl;
+
+    // Save RGB image for Gaussian Mapping
+    this->imgLeftRGB = imRGB.clone();
+    this->imgAuxiliary = imDepth.clone();//存储深度图
+    this->undistortedRGB = undistorted_img.clone();
+
+    // Scale Level Info
+    mnScaleLevels = mpExtractorLeft->GetLevels();
+    mfScaleFactor = mpExtractorLeft->GetScaleFactor();
+    mfLogScaleFactor = log(mfScaleFactor);
+    mvScaleFactors = mpExtractorLeft->GetScaleFactors();
+    mvInvScaleFactors = mpExtractorLeft->GetInverseScaleFactors();
+    mvLevelSigma2 = mpExtractorLeft->GetScaleSigmaSquares();
+    mvInvLevelSigma2 = mpExtractorLeft->GetInverseScaleSigmaSquares();
+
+    // SuperPoint extraction
+#ifdef REGISTER_TIMES
+    std::chrono::steady_clock::time_point time_StartExtORB = std::chrono::steady_clock::now();
+#endif
+    ExtractKeyPoints(0,imGray,0,0);//特征提取
 #ifdef REGISTER_TIMES
     std::chrono::steady_clock::time_point time_EndExtORB = std::chrono::steady_clock::now();
 
@@ -401,6 +605,103 @@ Frame::Frame(const cv::Mat &imGray, const cv::Mat &imRGB, const double &timeStam
 }
 
 
+// Constructor for Monocular cameras with SuperPoint
+Frame::Frame(const cv::Mat &imGray, const cv::Mat &imRGB, const double &timeStamp, SPextractor* extractor, SPVocabulary* voc, GeometricCamera* pCamera, cv::Mat &distCoef, const float &bf, const float &thDepth, const cv::Mat &undistorted_img, Frame* pPrevF, const IMU::Calib &ImuCalib)
+    :mpcpi(NULL),mpSPvocabulary(voc),mpExtractorLeft(extractor),mpExtractorRight(static_cast<SPextractor*>(NULL)),
+     mTimeStamp(timeStamp), mK(static_cast<Pinhole*>(pCamera)->toK()), mK_(static_cast<Pinhole*>(pCamera)->toK_()), mDistCoef(distCoef.clone()), mbf(bf), mThDepth(thDepth),
+     mImuCalib(ImuCalib), mpImuPreintegrated(NULL),mpPrevFrame(pPrevF),mpImuPreintegratedFrame(NULL), mpReferenceKF(static_cast<KeyFrame*>(NULL)), mbIsSet(false), mbImuPreintegrated(false), mpCamera(pCamera),
+     mpCamera2(nullptr), mbHasPose(false), mbHasVelocity(false)
+{
+    // Frame ID
+    mnId=nNextId++;
+
+    // Save RGB image for Gaussian Mapping
+    this->imgLeftRGB = imRGB.clone();
+    this->undistortedRGB = undistorted_img.clone();
+
+    // Scale Level Info
+    mnScaleLevels = mpExtractorLeft->GetLevels();
+    mfScaleFactor = mpExtractorLeft->GetScaleFactor();
+    mfLogScaleFactor = log(mfScaleFactor);
+    mvScaleFactors = mpExtractorLeft->GetScaleFactors();
+    mvInvScaleFactors = mpExtractorLeft->GetInverseScaleFactors();
+    mvLevelSigma2 = mpExtractorLeft->GetScaleSigmaSquares();
+    mvInvLevelSigma2 = mpExtractorLeft->GetInverseScaleSigmaSquares();
+
+    // SuperPoint extraction
+#ifdef REGISTER_TIMES
+    std::chrono::steady_clock::time_point time_StartExtORB = std::chrono::steady_clock::now();
+#endif
+    ExtractKeyPoints(0,imGray,0,1000);
+#ifdef REGISTER_TIMES
+    std::chrono::steady_clock::time_point time_EndExtORB = std::chrono::steady_clock::now();
+
+    mTimeORB_Ext = std::chrono::duration_cast<std::chrono::duration<double,std::milli> >(time_EndExtORB - time_StartExtORB).count();
+#endif
+
+
+    N = mvKeys.size();
+    if(mvKeys.empty())
+        return;
+
+    UndistortKeyPoints();
+
+    // Set no stereo information
+    mvuRight = vector<float>(N,-1);
+    mvDepth = vector<float>(N,-1);
+    mnCloseMPs = 0;
+
+    mvpMapPoints = vector<MapPoint*>(N,static_cast<MapPoint*>(NULL));
+    mvbOutlier = vector<bool>(N,false);
+
+    // This is done only for the first Frame (or after a change in the calibration)
+    if(mbInitialComputations)
+    {
+        ComputeImageBounds(imGray);
+
+        mfGridElementWidthInv=static_cast<float>(FRAME_GRID_COLS)/static_cast<float>(mnMaxX-mnMinX);
+        mfGridElementHeightInv=static_cast<float>(FRAME_GRID_ROWS)/static_cast<float>(mnMaxY-mnMinY);
+
+        fx = static_cast<Pinhole*>(mpCamera)->toK().at<float>(0,0);
+        fy = static_cast<Pinhole*>(mpCamera)->toK().at<float>(1,1);
+        cx = static_cast<Pinhole*>(mpCamera)->toK().at<float>(0,2);
+        cy = static_cast<Pinhole*>(mpCamera)->toK().at<float>(1,2);
+        invfx = 1.0f/fx;
+        invfy = 1.0f/fy;
+
+        mbInitialComputations=false;
+    }
+
+
+    mb = mbf/fx;
+
+    //Set no stereo fisheye information
+    Nleft = -1;
+    Nright = -1;
+    mvLeftToRightMatch = vector<int>(0);
+    mvRightToLeftMatch = vector<int>(0);
+    mvStereo3Dpoints = vector<Eigen::Vector3f>(0);
+    monoLeft = -1;
+    monoRight = -1;
+
+    AssignFeaturesToGrid();
+
+    if(pPrevF)
+    {
+        if(pPrevF->HasVelocity())
+        {
+            SetVelocity(pPrevF->GetVelocity());
+        }
+    }
+    else
+    {
+        mVw.setZero();
+    }
+
+    mpMutexImu = new std::mutex();
+}
+
+
 void Frame::AssignFeaturesToGrid()
 {
     // Fill matrix with points
@@ -441,6 +742,16 @@ void Frame::ExtractORB(int flag, const cv::Mat &im, const int x0, const int x1)
         monoLeft = (*mpORBextractorLeft)(im,cv::Mat(),mvKeys,mDescriptors,vLapping);
     else
         monoRight = (*mpORBextractorRight)(im,cv::Mat(),mvKeysRight,mDescriptorsRight,vLapping);
+}
+
+void Frame::ExtractKeyPoints(int flag, const cv::Mat &im, const int x0, const int x1)
+{
+    vector<int> vLapping = {x0,x1};
+    if(flag==0){
+        monoLeft = (*mpExtractorLeft)(im,mvKeys,mDescriptors);
+    }
+    else
+        monoRight = (*mpExtractorRight)(im,mvKeysRight,mDescriptorsRight);
 }
 
 bool Frame::isSet() const {
@@ -1171,9 +1482,203 @@ Frame::Frame(const cv::Mat &imLeft, const cv::Mat &imRight, const double &timeSt
 
     UndistortKeyPoints();
 
-}
+    
 
-void Frame::ComputeStereoFishEyeMatches() {
+    }
+
+    
+
+    
+
+    // Constructor for stereo cameras with SuperPoint and dual camera support
+
+    Frame::Frame(const cv::Mat &imLeft, const cv::Mat &imRight, const double &timeStamp, SPextractor* extractorLeft, SPextractor* extractorRight, SPVocabulary* voc, cv::Mat &K, cv::Mat &distCoef, const float &bf, const float &thDepth, GeometricCamera* pCamera, GeometricCamera* pCamera2, Sophus::SE3f& Tlr,Frame* pPrevF, const IMU::Calib &ImuCalib)
+
+        :mpcpi(NULL), mpSPvocabulary(voc),mpExtractorLeft(extractorLeft),mpExtractorRight(extractorRight), mTimeStamp(timeStamp), mK(K.clone()), mK_(Converter::toMatrix3f(K)),  mDistCoef(distCoef.clone()), mbf(bf), mThDepth(thDepth),
+
+         mImuCalib(ImuCalib), mpImuPreintegrated(NULL), mpPrevFrame(pPrevF),mpImuPreintegratedFrame(NULL), mpReferenceKF(static_cast<KeyFrame*>(NULL)), mbImuPreintegrated(false), mpCamera(pCamera), mpCamera2(pCamera2),
+
+         mbHasPose(false), mbHasVelocity(false)
+
+    
+
+    {
+
+        imgLeft = imLeft.clone();
+
+        imgRight = imRight.clone();
+
+    
+
+        // Frame ID
+
+        mnId=nNextId++;
+
+    
+
+        // Scale Level Info
+
+        mnScaleLevels = mpExtractorLeft->GetLevels();
+
+        mfScaleFactor = mpExtractorLeft->GetScaleFactor();
+
+        mfLogScaleFactor = log(mfScaleFactor);
+
+        mvScaleFactors = mpExtractorLeft->GetScaleFactors();
+
+        mvInvScaleFactors = mpExtractorLeft->GetInverseScaleFactors();
+
+        mvLevelSigma2 = mpExtractorLeft->GetScaleSigmaSquares();
+
+        mvInvLevelSigma2 = mpExtractorLeft->GetInverseScaleSigmaSquares();
+
+    
+
+        // SuperPoint extraction
+
+    #ifdef REGISTER_TIMES
+
+        std::chrono::steady_clock::time_point time_StartExtORB = std::chrono::steady_clock::now();
+
+    #endif
+
+        thread threadLeft(&Frame::ExtractKeyPoints,this,0,imLeft,static_cast<KannalaBrandt8*>(mpCamera)->mvLappingArea[0],static_cast<KannalaBrandt8*>(mpCamera)->mvLappingArea[1]);
+
+        thread threadRight(&Frame::ExtractKeyPoints,this,1,imRight,static_cast<KannalaBrandt8*>(mpCamera2)->mvLappingArea[0],static_cast<KannalaBrandt8*>(mpCamera2)->mvLappingArea[1]);
+
+        threadLeft.join();
+
+        threadRight.join();
+
+    #ifdef REGISTER_TIMES
+
+        std::chrono::steady_clock::time_point time_EndExtORB = std::chrono::steady_clock::now();
+
+    
+
+        mTimeORB_Ext = std::chrono::duration_cast<std::chrono::duration<double,std::milli> >(time_EndExtORB - time_StartExtORB).count();
+
+    #endif
+
+    
+
+        Nleft = mvKeys.size();
+
+        Nright = mvKeysRight.size();
+
+        N = Nleft + Nright;
+
+    
+
+        if(N == 0)
+
+            return;
+
+    
+
+        // This is done only for the first Frame (or after a change in the calibration)
+
+        if(mbInitialComputations)
+
+        {
+
+            ComputeImageBounds(imLeft);
+
+    
+
+            mfGridElementWidthInv=static_cast<float>(FRAME_GRID_COLS)/(mnMaxX-mnMinX);
+
+            mfGridElementHeightInv=static_cast<float>(FRAME_GRID_ROWS)/(mnMaxY-mnMinY);
+
+    
+
+            fx = K.at<float>(0,0);
+
+            fy = K.at<float>(1,1);
+
+            cx = K.at<float>(0,2);
+
+            cy = K.at<float>(1,2);
+
+            invfx = 1.0f/fx;
+
+            invfy = 1.0f/fy;
+
+    
+
+            mbInitialComputations=false;
+
+        }
+
+    
+
+        mb = mbf / fx;
+
+    
+
+        // Sophus/Eigen
+
+        mTlr = Tlr;
+
+        mTrl = mTlr.inverse();
+
+        mRlr = mTlr.rotationMatrix();
+
+        mtlr = mTlr.translation();
+
+    
+
+    #ifdef REGISTER_TIMES
+
+        std::chrono::steady_clock::time_point time_StartStereoMatches = std::chrono::steady_clock::now();
+
+    #endif
+
+        ComputeStereoFishEyeMatches();
+
+    #ifdef REGISTER_TIMES
+
+        std::chrono::steady_clock::time_point time_EndStereoMatches = std::chrono::steady_clock::now();
+
+    
+
+        mTimeStereoMatch = std::chrono::duration_cast<std::chrono::duration<double,std::milli> >(time_EndStereoMatches - time_StartStereoMatches).count();
+
+    #endif
+
+    
+
+        //Put all descriptors in the same matrix
+
+        cv::vconcat(mDescriptors,mDescriptorsRight,mDescriptors);
+
+    
+
+        mvpMapPoints = vector<MapPoint*>(N,static_cast<MapPoint*>(nullptr));
+
+        mvbOutlier = vector<bool>(N,false);
+
+    
+
+        AssignFeaturesToGrid();
+
+    
+
+        mpMutexImu = new std::mutex();
+
+    
+
+        UndistortKeyPoints();
+
+    
+
+    }
+
+    
+
+    
+
+    void Frame::ComputeStereoFishEyeMatches() {
     //Speed it up by matching keypoints in the lapping area
     vector<cv::KeyPoint> stereoLeft(mvKeys.begin() + monoLeft, mvKeys.end());
     vector<cv::KeyPoint> stereoRight(mvKeysRight.begin() + monoRight, mvKeysRight.end());

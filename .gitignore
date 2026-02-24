@@ -39,3 +39,17 @@ Thumbs.db
 
 # Test output
 test_output/
+
+# Vocabulary files (large binary files)
+ORB-SLAM3/Vocabulary/*.bin
+ORB-SLAM3/Vocabulary/*.yml
+ORB-SLAM3/Vocabulary/*.gz
+voc_*
+
+# ONNX model files
+onnxmodel/
+*.onnx
+
+# Test programs
+test_*.cpp
+test_*

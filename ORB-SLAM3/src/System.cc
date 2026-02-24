@@ -113,7 +113,7 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
         //Load SuperPoint Vocabulary
         cout << endl << "Loading SuperPoint Vocabulary. This could take a while..." << endl;
 
-        mpVocabulary = new ORBVocabulary();
+        mpVocabulary = new SPVocabulary();
         mpVocabulary->load(strVocFile);
         cout << "Vocabulary loaded!" << endl << endl;
 
@@ -129,7 +129,7 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
         //Load SuperPoint Vocabulary
         cout << endl << "Loading SuperPoint Vocabulary. This could take a while..." << endl;
 
-        mpVocabulary = new ORBVocabulary();
+        mpVocabulary = new SPVocabulary();
         mpVocabulary->load(strVocFile);
         cout << "Vocabulary loaded!" << endl << endl;
 
