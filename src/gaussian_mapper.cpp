@@ -780,9 +780,15 @@ void GaussianMapper::run()
 
     std::cout << std::endl << "anchors:" <<  gaussians_->get_anchor().size(0) << std::endl;
     std::ofstream(result_dir_ / "gaussians_num.txt") << gaussians_->get_anchor().size(0);
-    renderAndRecordAllKeyframes("_shutdown");
-    savePly(result_dir_ / (std::to_string(getIteration()) + "_shutdown") / "ply");
-    writeKeyframeUsedTimes(result_dir_ / "used_times", "final");
+    
+    // Only render and save if GaussianMapper has been initialized
+    if (initial_mapped_) {
+        renderAndRecordAllKeyframes("_shutdown");
+        savePly(result_dir_ / (std::to_string(getIteration()) + "_shutdown") / "ply");
+        writeKeyframeUsedTimes(result_dir_ / "used_times", "final");
+    } else {
+        std::cout << "WARNING: GaussianMapper not initialized, skipping rendering and saving" << std::endl;
+    }
     
     std::string result = result_dir_ / (std::to_string(getIteration()) + "_shutdown");
     std::cout << ":" << std::endl;

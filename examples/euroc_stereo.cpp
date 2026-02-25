@@ -119,6 +119,7 @@ int main(int argc, char **argv)
         std::make_shared<GaussianMapper>(
             pSLAM, gaussian_cfg_path, output_dir, 0, device_type);
     std::thread training_thd(&GaussianMapper::run, pGausMapper.get());
+    std::cout << "DEBUG: GaussianMapper thread started" << std::endl;
 
     // Create Gaussian Viewer
     std::thread viewer_thd;
@@ -145,14 +146,27 @@ int main(int argc, char **argv)
         int num_rect = 0;
     // Main loop
     cv::Mat imLeft, imRight;
-    for (int ni = 0; ni < nImages; ni++)
+    int max_frames = 2;  // Only process 2 frames for testing
+    for (int ni = 0; ni < max_frames && ni < nImages; ni++)
     {
+        std::cout << "DEBUG: ===== Starting frame " << ni << " =====" << std::endl;
         if (pSLAM->isShutDown())
+        {
+            std::cout << "DEBUG: System is shut down, breaking loop" << std::endl;
             break;
+        }
+        
+        std::cout << "DEBUG: About to read images..." << std::endl;
         // Read left and right images from file
         imLeft = cv::imread(vstrImageLeft[ni], cv::IMREAD_UNCHANGED);
+        std::cout << "DEBUG: Read left image, size = " << imLeft.rows << "x" << imLeft.cols << std::endl;
+        
         imRight = cv::imread(vstrImageRight[ni], cv::IMREAD_UNCHANGED);
+        std::cout << "DEBUG: Read right image, size = " << imRight.rows << "x" << imRight.cols << std::endl;
+        
         double tframe = vTimestampsCam[ni];
+        std::cout << "DEBUG: tframe = " << tframe << std::endl;
+        std::cout << "DEBUG: About to check if images are empty..." << std::endl;
 
         if (imLeft.empty())
         {
@@ -166,48 +180,99 @@ int main(int argc, char **argv)
                       << std::string(vstrImageRight[ni]) << std::endl;
             return 1;
         }
+        
+        std::cout << "DEBUG: Images loaded successfully" << std::endl;
 
         if (imageScale != 1.f)
         {
+            std::cout << "DEBUG: Resizing images..." << std::endl;
             int width = imLeft.cols * imageScale;
             int height = imLeft.rows * imageScale;
             cv::resize(imLeft, imLeft, cv::Size(width, height));
             cv::resize(imRight, imRight, cv::Size(width, height));
+            std::cout << "DEBUG: Images resized to " << width << "x" << height << std::endl;
         }
 
         std::chrono::steady_clock::time_point t1 = std::chrono::steady_clock::now();
 
         // Pass the images to the SLAM system
+        std::cout << "Processing frame " << ni << "/" << nImages << "..." << std::endl;
+        std::cout << "DEBUG: About to call TrackStereo..." << std::endl;
         pSLAM->TrackStereo(imLeft, imRight, tframe, std::vector<ORB_SLAM3::IMU::Point>(), vstrImageLeft[ni]);
+        std::cout << "Frame " << ni << " processed successfully" << std::endl;
+        std::cout << "DEBUG: TrackStereo returned" << std::endl;
+        std::cout << "DEBUG: About to calculate ttrack..." << std::endl;
 
         std::chrono::steady_clock::time_point t2 = std::chrono::steady_clock::now();
 
         double ttrack = std::chrono::duration_cast<std::chrono::duration<double>>(t2 - t1).count();
         vTimesTrack[ni] = ttrack;
+        std::cout << "DEBUG: ttrack = " << ttrack << std::endl;
 
         // Wait to load the next frame
         double T = 0;
-        if (ni < nImages - 1)
+        std::cout << "DEBUG: About to calculate T..." << std::endl;
+        std::cout << "DEBUG: ni = " << ni << ", nImages = " << nImages << std::endl;
+        std::cout << "DEBUG: nImages - 1 = " << (nImages - 1) << std::endl;
+        if (ni < nImages - 1) {
+            std::cout << "DEBUG: ni < nImages - 1, accessing vTimestampsCam[" << (ni + 1) << "]" << std::endl;
             T = vTimestampsCam[ni + 1] - tframe;
-        else if (ni > 0)
+            std::cout << "DEBUG: T calculated from vTimestampsCam[" << (ni + 1) << "]" << std::endl;
+        }
+        else if (ni > 0) {
+            std::cout << "DEBUG: ni > 0, accessing vTimestampsCam[" << (ni - 1) << "]" << std::endl;
             T = tframe - vTimestampsCam[ni - 1];
+            std::cout << "DEBUG: T calculated from vTimestampsCam[" << (ni - 1) << "]" << std::endl;
+        }
+        std::cout << "DEBUG: T = " << T << std::endl;
 
-        if (ttrack < T)
+        if (ttrack < T) {
+            std::cout << "DEBUG: About to usleep for " << ((T - ttrack) * 1e6) << " microseconds" << std::endl;
             usleep((T - ttrack) * 1e6);
+            std::cout << "DEBUG: usleep completed" << std::endl;
+        }
+        std::cout << "DEBUG: End of frame loop, about to increment ni" << std::endl;
+        std::cout << "DEBUG: ni before increment = " << ni << std::endl;
+        ni++;
+        std::cout << "DEBUG: ni after increment = " << ni << std::endl;
     }
+    
+    std::cout << "DEBUG: Frame loop completed successfully!" << std::endl;
+    std::cout << "All frames processed. Saving trajectory..." << std::endl;
+    std::cout << "DEBUG: About to call SaveTrajectoryTUM..." << std::endl;
     pSLAM->SaveTrajectoryTUM((output_dir / "CameraTrajectory_TUM_bf.txt").string());
-    std::cout << "SaveTrajectoryTUM" << std::endl;
+    std::cout << "SaveTrajectoryTUM completed" << std::endl;
+    std::cout << "DEBUG: About to call LoadTrajectory..." << std::endl;
     // 写个读取函数,把轨迹和mnid绑定哈希表
     // LoadTrajectory((output_dir / "CameraTrajectory_TUM_bf.txt").string(), pGausMapper->pose_);
     example_utils::LoadTrajectory((output_dir / "CameraTrajectory_TUM_bf.txt").string(), pGausMapper->pose_);
+    std::cout << "DEBUG: LoadTrajectory completed" << std::endl;
     pGausMapper->poseSaved =true;
+    std::cout << "DEBUG: poseSaved set to true" << std::endl;
 
-
+    std::cout << "DEBUG: About to signal GaussianMapper to stop..." << std::endl;
+    pGausMapper->signalStop(true);
+    std::cout << "DEBUG: About to call pSLAM->Shutdown()..." << std::endl;
     // Stop all threads
     pSLAM->Shutdown();
-    training_thd.join();
-    if (use_viewer)
+    std::cout << "DEBUG: pSLAM->Shutdown() completed" << std::endl;
+    std::cout << "DEBUG: About to join training_thd..." << std::endl;
+    
+    // Simple join without timeout for now
+    // The GaussianMapper should exit quickly now with the fix
+    try {
+        training_thd.join();
+        std::cout << "DEBUG: training_thd joined successfully" << std::endl;
+    } catch (const std::exception& e) {
+        std::cerr << "ERROR: Exception while joining training_thd: " << e.what() << std::endl;
+    } catch (...) {
+        std::cerr << "ERROR: Unknown exception while joining training_thd" << std::endl;
+    }
+    if (use_viewer) {
+        std::cout << "DEBUG: About to join viewer_thd..." << std::endl;
         viewer_thd.join();
+        std::cout << "DEBUG: viewer_thd.join() completed" << std::endl;
+    }
 
     // GPU peak usage
     saveGpuPeakMemoryUsage(output_dir / "GpuPeakUsageMB.txt");

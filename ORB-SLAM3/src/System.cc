@@ -556,6 +556,18 @@ vector<KeyFrame*> System::SaveTrajectoryTUM(const string &filename)
     vector<KeyFrame*> vpKFs = mpAtlas->GetAllKeyFrames();
     sort(vpKFs.begin(),vpKFs.end(),KeyFrame::lId);
 
+    // Check if there are any keyframes
+    if (vpKFs.empty()) {
+        cout << "Warning: No keyframes found. Trajectory will be empty." << endl;
+        ofstream f;
+        f.open(filename.c_str());
+        f << fixed;
+        f.close();
+        return vector<KeyFrame*>();
+    }
+
+    cout << "Found " << vpKFs.size() << " keyframes." << endl;
+
     // Transform all keyframes so that the first keyframe is at the origin.
     // After a loop closure the first keyframe might not be at the origin.
     Sophus::SE3f Two = vpKFs[0]->GetPoseInverse();

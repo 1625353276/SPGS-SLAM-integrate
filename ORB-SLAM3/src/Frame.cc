@@ -25,6 +25,7 @@
 #include "Extractors/SPextractor.h"
 #include "Converter.h"
 #include "ORBmatcher.h"
+#include "Matchers/SPmatcher.h"
 #include "GeometricCamera.h"
 
 #include <thread>
@@ -114,6 +115,10 @@ Frame::Frame(const cv::Mat &imLeft, const cv::Mat &imRight, const cv::Mat &imRGB
     // Save RGB image for Gaussian Mapping
     this->imgLeftRGB = imRGB.clone();
     this->imgAuxiliary = imRightRGB.clone();
+    
+    // Save grayscale images for stereo matching
+    this->imgLeft = imLeft.clone();
+    this->imgRight = imRight.clone();
 
     // Scale Level Info
     mnScaleLevels = mpORBextractorLeft->GetLevels();
@@ -219,6 +224,10 @@ Frame::Frame(const cv::Mat &imLeft, const cv::Mat &imRight, const cv::Mat &imRGB
     // Save RGB image for Gaussian Mapping
     this->imgLeftRGB = imRGB.clone();
     this->imgAuxiliary = imRightRGB.clone();
+    
+    // Save grayscale images for stereo matching
+    this->imgLeft = imLeft.clone();
+    this->imgRight = imRight.clone();
 
     // Scale Level Info
     mnScaleLevels = mpExtractorLeft->GetLevels();
@@ -244,15 +253,22 @@ Frame::Frame(const cv::Mat &imLeft, const cv::Mat &imRight, const cv::Mat &imRGB
 #endif
 
     N = mvKeys.size();
+    cout << "Frame stereo (SP): N = " << N << " keypoints after extraction" << endl;
     if(mvKeys.empty())
         return;
 
+    cout << "Frame stereo (SP): Calling UndistortKeyPoints..." << endl;
     UndistortKeyPoints();
+    cout << "Frame stereo (SP): UndistortKeyPoints completed" << endl;
 
 #ifdef REGISTER_TIMES
     std::chrono::steady_clock::time_point time_StartStereoMatches = std::chrono::steady_clock::now();
 #endif
+    cout << "Frame stereo (SP): mDescriptors type = " << mDescriptors.type() << ", size = " << mDescriptors.size() << endl;
+    cout << "Frame stereo (SP): mvKeysRight size = " << mvKeysRight.size() << ", mDescriptorsRight type = " << mDescriptorsRight.type() << endl;
+    cout << "Frame stereo (SP): Calling ComputeStereoMatches..." << endl;
     ComputeStereoMatches();
+    cout << "Frame stereo (SP): ComputeStereoMatches completed" << endl;
 #ifdef REGISTER_TIMES
     std::chrono::steady_clock::time_point time_EndStereoMatches = std::chrono::steady_clock::now();
 
@@ -748,7 +764,9 @@ void Frame::ExtractKeyPoints(int flag, const cv::Mat &im, const int x0, const in
 {
     vector<int> vLapping = {x0,x1};
     if(flag==0){
+        cout << "ExtractKeyPoints: Calling mpExtractorLeft for flag=0..." << endl;
         monoLeft = (*mpExtractorLeft)(im,mvKeys,mDescriptors);
+        cout << "ExtractKeyPoints: Extracted " << mvKeys.size() << " keypoints" << endl;
     }
     else
         monoRight = (*mpExtractorRight)(im,mvKeysRight,mDescriptorsRight);
@@ -1161,14 +1179,20 @@ void Frame::ComputeImageBounds(const cv::Mat &imLeft)
 
 void Frame::ComputeStereoMatches()
 {
+    cout << "ComputeStereoMatches: Starting..." << endl;
+    cout << "ComputeStereoMatches: N=" << N << ", mvKeys.size()=" << mvKeys.size() << ", mvKeysRight.size()=" << mvKeysRight.size() << endl;
+    cout << "ComputeStereoMatches: imgLeft size=" << imgLeft.rows << "x" << imgLeft.cols << ", imgRight size=" << imgRight.rows << "x" << imgRight.cols << endl;
+    cout << "ComputeStereoMatches: mDescriptors size=" << mDescriptors.rows << "x" << mDescriptors.cols << ", mDescriptorsRight size=" << mDescriptorsRight.rows << "x" << mDescriptorsRight.cols << endl;
+
     mvuRight = vector<float>(N,-1.0f);
     mvDepth = vector<float>(N,-1.0f);
 
-    const int thOrbDist = (ORBmatcher::TH_HIGH+ORBmatcher::TH_LOW)/2;
+    cout << "ComputeStereoMatches: Initialized mvuRight and mvDepth" << endl;
 
-    const int nRows = mpORBextractorLeft->mvImagePyramid[0].rows;
+    const float thOrbDist = (1.4f+1.2f)/2;
+    
+    const int nRows = imgLeft.rows;
 
-    //Assign keypoints to row table
     vector<vector<size_t> > vRowIndices(nRows,vector<size_t>());
 
     for(int i=0; i<nRows; i++)
@@ -1183,17 +1207,15 @@ void Frame::ComputeStereoMatches()
         const float r = 2.0f*mvScaleFactors[mvKeysRight[iR].octave];
         const int maxr = ceil(kpY+r);
         const int minr = floor(kpY-r);
-
+         
         for(int yi=minr;yi<=maxr;yi++)
             vRowIndices[yi].push_back(iR);
     }
-
-    // Set limits for search
+    
     const float minZ = mb;
     const float minD = 0;
     const float maxD = mbf/minZ;
-
-    // For each left keypoint search a match in the right image
+    
     vector<pair<int, int> > vDistIdx;
     vDistIdx.reserve(N);
 
@@ -1215,12 +1237,11 @@ void Frame::ComputeStereoMatches()
         if(maxU<0)
             continue;
 
-        int bestDist = ORBmatcher::TH_HIGH;
+        float bestDist = 1.4f;
         size_t bestIdxR = 0;
 
         const cv::Mat &dL = mDescriptors.row(iL);
 
-        // Compare descriptor to right keypoints
         for(size_t iC=0; iC<vCandidates.size(); iC++)
         {
             const size_t iR = vCandidates[iC];
@@ -1234,7 +1255,7 @@ void Frame::ComputeStereoMatches()
             if(uR>=minU && uR<=maxU)
             {
                 const cv::Mat &dR = mDescriptorsRight.row(iR);
-                const int dist = ORBmatcher::DescriptorDistance(dL,dR);
+                const float dist = cv::norm(dL,dR,cv::NORM_L2);
 
                 if(dist<bestDist)
                 {
@@ -1244,36 +1265,35 @@ void Frame::ComputeStereoMatches()
             }
         }
 
-        // Subpixel match by correlation
         if(bestDist<thOrbDist)
         {
-            // coordinates in image pyramid at keypoint scale
             const float uR0 = mvKeysRight[bestIdxR].pt.x;
             const float scaleFactor = mvInvScaleFactors[kpL.octave];
             const float scaleduL = round(kpL.pt.x*scaleFactor);
             const float scaledvL = round(kpL.pt.y*scaleFactor);
             const float scaleduR0 = round(uR0*scaleFactor);
 
-            // sliding window search
             const int w = 5;
-            cv::Mat IL = mpORBextractorLeft->mvImagePyramid[kpL.octave].rowRange(scaledvL-w,scaledvL+w+1).colRange(scaleduL-w,scaleduL+w+1);
-
-            int bestDist = INT_MAX;
+            cv::Mat IL = imgLeft.rowRange(scaledvL-w,scaledvL+w+1).colRange(scaleduL-w,scaleduL+w+1);
+            
+            float bestDist = INT_MAX;
             int bestincR = 0;
             const int L = 5;
             vector<float> vDists;
             vDists.resize(2*L+1);
 
-            const float iniu = scaleduR0+L-w;
+            const float iniu = scaleduR0-L-w;
             const float endu = scaleduR0+L+w+1;
-            if(iniu<0 || endu >= mpORBextractorRight->mvImagePyramid[kpL.octave].cols)
+            
+            if(iniu<0 || endu >= imgRight.cols)
                 continue;
-
+                
             for(int incR=-L; incR<=+L; incR++)
             {
-                cv::Mat IR = mpORBextractorRight->mvImagePyramid[kpL.octave].rowRange(scaledvL-w,scaledvL+w+1).colRange(scaleduR0+incR-w,scaleduR0+incR+w+1);
-
+                cv::Mat IR = imgRight.rowRange(scaledvL-w,scaledvL+w+1).colRange(scaleduR0+incR-w,scaleduR0+incR+w+1);
+                
                 float dist = cv::norm(IL,IR,cv::NORM_L1);
+                
                 if(dist<bestDist)
                 {
                     bestDist =  dist;
@@ -1286,7 +1306,6 @@ void Frame::ComputeStereoMatches()
             if(bestincR==-L || bestincR==L)
                 continue;
 
-            // Sub-pixel match (Parabola fitting)
             const float dist1 = vDists[L+bestincR-1];
             const float dist2 = vDists[L+bestincR];
             const float dist3 = vDists[L+bestincR+1];
@@ -1296,7 +1315,6 @@ void Frame::ComputeStereoMatches()
             if(deltaR<-1 || deltaR>1)
                 continue;
 
-            // Re-scaled coordinate
             float bestuR = mvScaleFactors[kpL.octave]*((float)scaleduR0+(float)bestincR+deltaR);
 
             float disparity = (uL-bestuR);

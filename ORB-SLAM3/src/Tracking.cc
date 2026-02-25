@@ -2467,8 +2467,10 @@ void Tracking::Track()
 
 void Tracking::StereoInitialization()
 {
+    cout << "Checking stereo initialization: N=" << mCurrentFrame.N << endl;
     if(mCurrentFrame.N>500)
     {
+        cout << "Stereo initialization started with " << mCurrentFrame.N << " features." << endl;
         if (mSensor == System::IMU_STEREO || mSensor == System::IMU_RGBD)
         {
             if (!mCurrentFrame.mpImuPreintegrated || !mLastFrame.mpImuPreintegrated)
