@@ -118,7 +118,7 @@
       "Start GaussianMapper thread",
       "Verify thread runs without errors"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "functionality",
