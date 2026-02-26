@@ -353,8 +353,13 @@ target_link_libraries(tum_rgbd
 # EuRoC Stereo
 add_executable(euroc_stereo examples/euroc_stereo.cpp)
 target_link_libraries(euroc_stereo
-    gaussian_viewer    
+    gaussian_viewer
     gaussian_mapper
+    ORB_SLAM3)
+
+# Test System Initialization
+add_executable(test_system_init test_system_init.cpp)
+target_link_libraries(test_system_init
     ORB_SLAM3)
 
 # Scannet Mono //效果很差

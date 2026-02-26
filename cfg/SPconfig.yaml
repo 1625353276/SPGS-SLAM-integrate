@@ -1,0 +1,27 @@
+%YAML:1.0
+
+#--------------------------------------------------------------------------------------------
+# SuperPoint Configuration for SPGS-SLAM
+#--------------------------------------------------------------------------------------------
+
+# SuperPoint model path (relative to SPGS-SLAM root directory)
+SuperPoint.modelPath: "bin/onnxmodel/superpoint.onnx"
+
+# SuperPoint device type (cuda or cpu)
+SuperPoint.device: "cuda"
+
+# SuperPoint extractor parameters
+SuperPoint.nFeatures: 1000
+SuperPoint.scaleFactor: 1.2
+SuperPoint.nLevels: 8
+SuperPoint.iniThFAST: 20
+SuperPoint.minThFAST: 7
+
+# SuperPoint vocabulary path (relative to SPGS-SLAM root directory)
+SuperPoint.vocabularyPath: "ORB-SLAM3/Vocabulary/SPvoc.yml"
+
+# SuperPoint matching threshold
+SuperPoint.matchingThreshold: 0.7
+
+# SuperPoint descriptor distance threshold
+SuperPoint.descriptorDistanceThreshold: 0.8
