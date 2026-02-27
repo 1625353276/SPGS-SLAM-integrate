@@ -399,6 +399,11 @@ std::cout << "[eval]gaussian frame nums: " <<nkfs << std::endl;
         int idx;
         int idx_scaffold = 0;
         unsigned long keyframe_id = vec_kfID.front();
+        
+        // Skip rendering if GaussianMapper was not initialized
+        if (nkfs == 0) {
+            std::cout << "WARNING: GaussianMapper has no keyframes, skipping evaluation rendering" << std::endl;
+        } else {
         for (idx = 0; idx < Traj.size(); idx++)
         {
             std::shared_ptr<GaussianKeyframe> new_kf = std::make_shared<GaussianKeyframe>(idx, pGausMapper->getIteration());
@@ -603,6 +608,8 @@ std::cout << "[eval]gaussian frame nums: " <<nkfs << std::endl;
                     << pose_trans(0) << " " << pose_trans(1) << " " << pose_trans(2) << " " 
                     << pose_rot.x() << " " << pose_rot.y() << " " << pose_rot.z() << " " << pose_rot.w() << std::endl;
         }
+        } // End of if (nkfs == 0) check
+        
         float dssim_avg_value = (std::accumulate(dssim_vec.begin(), dssim_vec.end(), 0.0f)+
                                std::accumulate(dssim_Kf_vec.begin(), dssim_Kf_vec.end(), 0.0f)) / Traj.size();
         float ssim_Kf_avg = std::accumulate(dssim_Kf_vec.begin(), dssim_Kf_vec.end(), 0.0f) / dssim_Kf_vec.size();
