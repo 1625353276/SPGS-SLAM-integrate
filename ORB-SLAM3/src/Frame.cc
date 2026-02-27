@@ -1087,8 +1087,12 @@ void Frame::ComputeBoW()
 {
     if(mBowVec.empty())
     {
+        std::cout << "[ComputeBoW] mpORBvocabulary=" << mpORBvocabulary << " mDescriptors.size()=" << mDescriptors.size() << std::endl;
         vector<cv::Mat> vCurrentDesc = Converter::toDescriptorVector(mDescriptors);
+        std::cout << "[ComputeBoW] vCurrentDesc.size()=" << vCurrentDesc.size() << std::endl;
+        std::cout << "[ComputeBoW] About to call transform..." << std::endl;
         mpORBvocabulary->transform(vCurrentDesc,mBowVec,mFeatVec,4);
+        std::cout << "[ComputeBoW] Transform completed" << std::endl;
     }
 }
 

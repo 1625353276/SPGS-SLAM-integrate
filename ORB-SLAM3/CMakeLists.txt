@@ -48,69 +48,90 @@ ${PROJECT_SOURCE_DIR}/include
 ${PROJECT_SOURCE_DIR}/include/CameraModels
 ${PROJECT_SOURCE_DIR}/Thirdparty/Sophus
 ${EIGEN3_INCLUDE_DIR}
+/usr/local/onnxruntime-linux-x64-gpu-1.16.3/include
 )
 
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/lib)
 
-add_library(${PROJECT_NAME} SHARED
-src/System.cc
-src/Tracking.cc
-src/LocalMapping.cc
-src/LoopClosing.cc
-src/ORBextractor.cc
-src/ORBmatcher.cc
-src/FrameDrawer.cc
-src/Converter.cc
-src/MapPoint.cc
-src/KeyFrame.cc
-src/Atlas.cc
-src/Map.cc
-src/MapDrawer.cc
-src/Optimizer.cc
-src/Frame.cc
-src/KeyFrameDatabase.cc
-src/Sim3Solver.cc
-src/Viewer.cc
-src/ImuTypes.cc
-src/G2oTypes.cc
-src/CameraModels/Pinhole.cpp
-src/CameraModels/KannalaBrandt8.cpp
-src/OptimizableTypes.cpp
-src/MLPnPsolver.cpp
-src/GeometricTools.cc
-src/TwoViewReconstruction.cc
-src/Config.cc
-src/Settings.cc
-include/System.h
-include/Tracking.h
-include/LocalMapping.h
-include/LoopClosing.h
-include/ORBextractor.h
-include/ORBmatcher.h
-include/FrameDrawer.h
-include/Converter.h
-include/MapPoint.h
-include/KeyFrame.h
-include/Atlas.h
-include/Map.h
-include/MapDrawer.h
-include/Optimizer.h
-include/Frame.h
-include/KeyFrameDatabase.h
-include/Sim3Solver.h
-include/Viewer.h
-include/ImuTypes.h
-include/G2oTypes.h
-include/CameraModels/GeometricCamera.h
-include/CameraModels/Pinhole.h
-include/CameraModels/KannalaBrandt8.h
-include/OptimizableTypes.h
-include/MLPnPsolver.h
-include/GeometricTools.h
-include/TwoViewReconstruction.h
-include/SerializationUtils.h
-include/Config.h
-include/Settings.h)
+# 使用显式列表而不是GLOB，因为GLOB在某些情况下可能不会正确识别子目录
+set(ORB_SLAM3_SOURCES
+    src/System.cc
+    src/Tracking.cc
+    src/LocalMapping.cc
+    src/LoopClosing.cc
+    src/ORBextractor.cc
+    src/ORBmatcher.cc
+    src/Extractors/SPextractor.cc
+    src/Extractors/superpoint_onnx.cc
+    src/Matchers/SPmatcher.cc
+    src/Matchers/lightglue_onnx.cpp
+    src/Matchers/transform.cpp
+    src/FrameDrawer.cc
+    src/Converter.cc
+    src/MapPoint.cc
+    src/KeyFrame.cc
+    src/Atlas.cc
+    src/Map.cc
+    src/MapDrawer.cc
+    src/Optimizer.cc
+    src/Frame.cc
+    src/KeyFrameDatabase.cc
+    src/Sim3Solver.cc
+    src/Viewer.cc
+    src/ImuTypes.cc
+    src/G2oTypes.cc
+    src/CameraModels/Pinhole.cpp
+    src/CameraModels/KannalaBrandt8.cpp
+    src/OptimizableTypes.cpp
+    src/MLPnPsolver.cpp
+    src/GeometricTools.cc
+    src/TwoViewReconstruction.cc
+    src/Config.cc
+    src/Settings.cc
+)
+
+set(ORB_SLAM3_HEADERS
+    include/System.h
+    include/Tracking.h
+    include/LocalMapping.h
+    include/LoopClosing.h
+    include/ORBextractor.h
+    include/ORBmatcher.h
+    include/Extractors/SPextractor.h
+    include/Extractors/superpoint_onnx.h
+    include/Matchers/SPmatcher.h
+    include/Matchers/lightglue_onnx.h
+    include/Matchers/Configuration.h
+    include/FrameDrawer.h
+    include/Converter.h
+    include/MapPoint.h
+    include/KeyFrame.h
+    include/Atlas.h
+    include/Map.h
+    include/MapDrawer.h
+    include/Optimizer.h
+    include/Frame.h
+    include/KeyFrameDatabase.h
+    include/Sim3Solver.h
+    include/Viewer.h
+    include/ImuTypes.h
+    include/G2oTypes.h
+    include/CameraModels/GeometricCamera.h
+    include/CameraModels/Pinhole.h
+    include/CameraModels/KannalaBrandt8.h
+    include/OptimizableTypes.h
+    include/MLPnPsolver.h
+    include/GeometricTools.h
+    include/TwoViewReconstruction.h
+    include/SerializationUtils.h
+    include/Config.h
+    include/Settings.h
+)
+
+message(STATUS "ORB_SLAM3 has ${CMAKE_CURRENT_LIST_LINE} source files")
+message(STATUS "ORB_SLAM3 includes: ${ORB_SLAM3_HEADERS}")
+
+add_library(${PROJECT_NAME} SHARED ${ORB_SLAM3_SOURCES} ${ORB_SLAM3_HEADERS})
 
 add_subdirectory(Thirdparty/g2o)
 
