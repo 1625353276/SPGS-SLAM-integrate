@@ -31,6 +31,7 @@
 #include <opencv2/core/core.hpp>
 
 #include "ORB-SLAM3/include/System.h"
+#include "ORB-SLAM3/include/ImuTypes.h"
 
 #include "include/gaussian_mapper.h"
 #include "viewer/imgui_viewer.h"
@@ -41,6 +42,8 @@
 
 void LoadImages(const std::string &strPathLeft, const std::string &strPathRight, const std::string &strPathTimes,
                 std::vector<std::string> &vstrImageLeft, std::vector<std::string> &vstrImageRight, std::vector<double> &vTimeStamps);
+void LoadIMU(const std::string &strImuPath, std::vector<double> &vTimeStamps, 
+             std::vector<cv::Point3f> &vAcc, std::vector<cv::Point3f> &vGyro);
 void saveTrackingTime(std::vector<float> &vTimesTrack, const std::string &strSavePath);
 void saveGpuPeakMemoryUsage(std::filesystem::path pathSave);
 
@@ -81,6 +84,15 @@ int main(int argc, char **argv)
     std::string pathCam1 = pathSeq + "/mav0/cam1/data";
     LoadImages(pathCam0, pathCam1, pathTimeStamps, vstrImageLeft, vstrImageRight, vTimestampsCam);
 
+    // Load IMU data
+    std::vector<double> vTimestampsImu;
+    std::vector<cv::Point3f> vAcc, vGyro;
+    std::string pathImu = pathSeq + "/mav0/imu0/data.csv";
+    LoadIMU(pathImu, vTimestampsImu, vAcc, vGyro);
+    
+    // Track first IMU index
+    int first_imu = 0;
+
     // Check consistency in the number of images
     int nImages = vstrImageLeft.size();
     if (vstrImageLeft.empty())
@@ -110,7 +122,7 @@ int main(int argc, char **argv)
     // Create SLAM system. It initializes all system threads and gets ready to process frames.
     std::shared_ptr<ORB_SLAM3::System> pSLAM =
         std::make_shared<ORB_SLAM3::System>(
-            argv[1], argv[2], ORB_SLAM3::System::STEREO);
+            argv[1], argv[2], ORB_SLAM3::System::IMU_STEREO);
     float imageScale = pSLAM->GetImageScale();
 
     // Create GaussianMapper
@@ -193,12 +205,32 @@ int main(int argc, char **argv)
             std::cout << "DEBUG: Images resized to " << width << "x" << height << std::endl;
         }
 
+        // Load imu measurements from previous frame
+        std::vector<ORB_SLAM3::IMU::Point> vImuMeas;
+        if(ni > 0)
+        {
+            int imu_count = 0;
+            while(vTimestampsImu[first_imu] <= vTimestampsCam[ni])
+            {
+                vImuMeas.push_back(ORB_SLAM3::IMU::Point(
+                    vAcc[first_imu].x, vAcc[first_imu].y, vAcc[first_imu].z,
+                    vGyro[first_imu].x, vGyro[first_imu].y, vGyro[first_imu].z,
+                    vTimestampsImu[first_imu]));
+                first_imu++;
+                imu_count++;
+            }
+            if(ni < 5) {
+                std::cout << "DEBUG Frame " << ni << ": Loaded " << imu_count << " IMU measurements, total vImuMeas size: " << vImuMeas.size() << std::endl;
+                std::cout.flush(); // 强制刷新输出
+            }
+        }
+
         std::chrono::steady_clock::time_point t1 = std::chrono::steady_clock::now();
 
         // Pass the images to the SLAM system
         std::cout << "Processing frame " << ni << "/" << nImages << "..." << std::endl;
         std::cout << "DEBUG: About to call TrackStereo..." << std::endl;
-        pSLAM->TrackStereo(imLeft, imRight, tframe, std::vector<ORB_SLAM3::IMU::Point>(), vstrImageLeft[ni]);
+        pSLAM->TrackStereo(imLeft, imRight, tframe, vImuMeas, vstrImageLeft[ni]);
         std::cout << "Frame " << ni << " processed successfully" << std::endl;
         std::cout << "DEBUG: TrackStereo returned" << std::endl;
         std::cout << "DEBUG: About to calculate ttrack..." << std::endl;
@@ -703,4 +735,41 @@ void saveGpuPeakMemoryUsage(std::filesystem::path pathSave)
     out << "Peak reserved (MB): " << max_reserved_MB << std::endl;
     out << "Peak allocated (MB): " << max_alloc_MB << std::endl;
     out.close();
+}
+
+void LoadIMU(const std::string &strImuPath, std::vector<double> &vTimeStamps, 
+             std::vector<cv::Point3f> &vAcc, std::vector<cv::Point3f> &vGyro)
+{
+    std::ifstream fImu;
+    fImu.open(strImuPath.c_str());
+    vTimeStamps.reserve(5000);
+    vAcc.reserve(5000);
+    vGyro.reserve(5000);
+
+    while(!fImu.eof())
+    {
+        std::string s;
+        getline(fImu, s);
+        if (s[0] == '#')
+            continue;
+
+        if(!s.empty())
+        {
+            std::string item;
+            size_t pos = 0;
+            double data[7];
+            int count = 0;
+            while ((pos = s.find(',')) != std::string::npos) {
+                item = s.substr(0, pos);
+                data[count++] = std::stod(item);
+                s.erase(0, pos + 1);
+            }
+            item = s.substr(0, pos);
+            data[6] = std::stod(item);
+
+            vTimeStamps.push_back(data[0]/1e9);
+            vAcc.push_back(cv::Point3f(data[4], data[5], data[6]));
+            vGyro.push_back(cv::Point3f(data[1], data[2], data[3]));
+        }
+    }
 }

@@ -125,7 +125,7 @@ namespace ORB_SLAM3 {
     }
 
     Settings::Settings(const std::string &configFile, const int& sensor) :
-    bNeedToUndistort_(false), bNeedToRectify_(false), bNeedToResize1_(false), bNeedToResize2_(false) {
+        bNeedToUndistort_(false), bNeedToRectify_(false), bNeedToResize1_(false), bNeedToResize2_(false), fastInit_(false) {
         sensor_ = sensor;
 
         //Open settings file
@@ -429,6 +429,15 @@ namespace ORB_SLAM3 {
         }
         else{
             insertKFsWhenLost_ = true;
+        }
+
+        // Read fastInit parameter
+        readParameter<int>(fSettings,"IMU.fastInit",found,false);
+        if(found){
+            fastInit_ = (bool) readParameter<int>(fSettings,"IMU.fastInit",found,false);
+        }
+        else{
+            fastInit_ = false;
         }
     }
 

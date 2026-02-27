@@ -126,6 +126,8 @@ add_library(ORB_SLAM3 SHARED
     ${ORB_SLAM3_SOURCE_DIR}/src/Settings.cc
     ${ORB_SLAM3_SOURCE_DIR}/src/Extractors/SPextractor.cc
     ${ORB_SLAM3_SOURCE_DIR}/src/Extractors/superpoint_onnx.cc
+    ${ORB_SLAM3_SOURCE_DIR}/src/Matchers/SPmatcher.cc
+    ${ORB_SLAM3_SOURCE_DIR}/src/Matchers/lightglue_onnx.cpp
     ${ORB_SLAM3_SOURCE_DIR}/src/Matchers/transform.cpp
     ${ORB_SLAM3_SOURCE_DIR}/src/MapDrawer.cc
     ${ORB_SLAM3_SOURCE_DIR}/src/Viewer.cc
