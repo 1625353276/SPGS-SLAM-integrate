@@ -214,7 +214,7 @@ Frame::Frame(const cv::Mat &imLeft, const cv::Mat &imRight, const cv::Mat &imRGB
 
 // Constructor for stereo cameras with SuperPoint
 Frame::Frame(const cv::Mat &imLeft, const cv::Mat &imRight, const cv::Mat &imRGB, const cv::Mat &imRightRGB, const double &timeStamp, SPextractor* extractorLeft, SPextractor* extractorRight, SPVocabulary* voc, cv::Mat &K, cv::Mat &distCoef, const float &bf, const float &thDepth, GeometricCamera* pCamera, Frame* pPrevF, const IMU::Calib &ImuCalib)
-    :mpcpi(NULL), mpSPvocabulary(voc),mpExtractorLeft(extractorLeft),mpExtractorRight(extractorRight), mTimeStamp(timeStamp), mK(K.clone()), mK_(Converter::toMatrix3f(K)), mDistCoef(distCoef.clone()), mbf(bf), mThDepth(thDepth),
+    :mpcpi(NULL), mpSPvocabulary(voc), mpORBvocabulary(voc), mpExtractorLeft(extractorLeft),mpExtractorRight(extractorRight), mTimeStamp(timeStamp), mK(K.clone()), mK_(Converter::toMatrix3f(K)), mDistCoef(distCoef.clone()), mbf(bf), mThDepth(thDepth),
      mImuCalib(ImuCalib), mpImuPreintegrated(NULL), mpPrevFrame(pPrevF),mpImuPreintegratedFrame(NULL), mpReferenceKF(static_cast<KeyFrame*>(NULL)), mbIsSet(false), mbImuPreintegrated(false),
      mpCamera(pCamera) ,mpCamera2(nullptr), mbHasPose(false), mbHasVelocity(false)
 {

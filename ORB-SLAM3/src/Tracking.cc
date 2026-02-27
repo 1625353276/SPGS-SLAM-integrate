@@ -2363,11 +2363,18 @@ void Tracking::Track()
 #endif
             bool bNeedKF = NeedNewKeyFrame();
 
+            // Debug output for STEREO mode
+            if(mSensor==System::STEREO) {
+                std::cout << "[KF Debug] bNeedKF=" << bNeedKF << " bOK=" << bOK << std::endl;
+            }
+
             // Check if we need to insert a new keyframe
             // if(bNeedKF && bOK)
             if(bNeedKF && (bOK || (mInsertKFsLost && mState==RECENTLY_LOST &&
-                                   (mSensor == System::IMU_MONOCULAR || mSensor == System::IMU_STEREO || mSensor == System::IMU_RGBD))))
+                                   (mSensor == System::IMU_MONOCULAR || mSensor == System::IMU_STEREO || mSensor == System::IMU_RGBD)))) {
+                std::cout << "[KF Debug] Creating new keyframe" << std::endl;
                 CreateNewKeyFrame();
+            }
 
 #ifdef REGISTER_TIMES
             std::chrono::steady_clock::time_point time_EndNewKF = std::chrono::steady_clock::now();
@@ -3293,14 +3300,14 @@ bool Tracking::NeedNewKeyFrame()
     if ((mSensor == System::RGBD && this->mImGray.size[0] == 680 && this->mImGray.size[1] == 1200) ||
         mSensor==System::STEREO) // replica
     {
-        thRefRatio = 0.95f;
+        thRefRatio = 0.75f;
         mMaxFrames_temp = mMaxFrames;
         mMaxFrames = 15;
     }
     if ((mSensor == System::RGBD && this->mImGray.size[0] == 480 && this->mImGray.size[1] == 640) ||
         mSensor==System::STEREO) // Scannet
     {
-        thRefRatio = 0.95f;
+        thRefRatio = 0.75f;
         mMaxFrames_temp = mMaxFrames;
         mMaxFrames = 15;
     }
@@ -3323,18 +3330,31 @@ bool Tracking::NeedNewKeyFrame()
 
     // Condition 1a: More than "MaxFrames" have passed from last keyframe insertion
     const bool c1a = mCurrentFrame.mnId>=mnLastKeyFrameId+mMaxFrames;
-    if ((mSensor == System::RGBD && this->mImGray.size[0] == 680 && this->mImGray.size[1] == 1200) ||
-        (mSensor == System::MONOCULAR && this->mImGray.size[0] == 680 && this->mImGray.size[1] == 1200) ||
-        mSensor==System::STEREO) // replica
-    {
-        mMaxFrames = mMaxFrames_temp;
-    }
+    // Commented out to allow more frequent keyframe insertion for STEREO mode
+    // if ((mSensor == System::RGBD && this->mImGray.size[0] == 680 && this->mImGray.size[1] == 1200) ||
+    //     (mSensor == System::MONOCULAR && this->mImGray.size[0] == 680 && this->mImGray.size[1] == 1200) ||
+    //     mSensor==System::STEREO) // replica
+    // {
+    //     mMaxFrames = mMaxFrames_temp;
+    // }
     // Condition 1b: More than "MinFrames" have passed and Local Mapping is idle
     const bool c1b = ((mCurrentFrame.mnId>=mnLastKeyFrameId+mMinFrames) && bLocalMappingIdle); //mpLocalMapper->KeyframesInQueue() < 2);
     //Condition 1c: tracking is weak
     const bool c1c = mSensor!=System::MONOCULAR && mSensor!=System::IMU_MONOCULAR && mSensor!=System::IMU_STEREO && mSensor!=System::IMU_RGBD && (mnMatchesInliers<nRefMatches*0.25 || bNeedToInsertClose) ;
     // Condition 2: Few tracked points compared to reference keyframe. Lots of visual odometry compared to map matches.
     const bool c2 = (((mnMatchesInliers<nRefMatches*thRefRatio || bNeedToInsertClose)) && mnMatchesInliers>15);
+    // Debug output for STEREO mode
+    if(mSensor==System::STEREO) {
+        std::cout << "[KF Debug] mnMatchesInliers=" << mnMatchesInliers 
+                  << " nRefMatches=" << nRefMatches 
+                  << " thRefRatio=" << thRefRatio
+                  << " nRefMatches*thRefRatio=" << nRefMatches*thRefRatio
+                  << " c2=" << c2
+                  << " c1a=" << c1a
+                  << " c1b=" << c1b
+                  << " c1c=" << c1c
+                  << std::endl;
+    }
 
     //std::cout << "NeedNewKF: c1a=" << c1a << "; c1b=" << c1b << "; c1c=" << c1c << "; c2=" << c2 << std::endl;
     // Temporal condition for Inertial cases

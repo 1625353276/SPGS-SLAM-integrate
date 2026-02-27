@@ -146,7 +146,7 @@ int main(int argc, char **argv)
         int num_rect = 0;
     // Main loop
     cv::Mat imLeft, imRight;
-    int max_frames = 2;  // Only process 2 frames for testing
+    int max_frames = 10;  // Process 10 frames for testing keyframe generation
     for (int ni = 0; ni < max_frames && ni < nImages; ni++)
     {
         std::cout << "DEBUG: ===== Starting frame " << ni << " =====" << std::endl;
