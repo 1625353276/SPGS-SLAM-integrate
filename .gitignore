@@ -53,3 +53,22 @@ onnxmodel/
 # Test programs
 test_*.cpp
 test_*
+# Output directories
+output/
+output_*/
+
+# Process ID files
+*.pid
+
+# Test logs
+test.log
+test_*.log
+
+# Evaluation metrics
+eval_metric.txt
+psnr*.txt
+dssim.txt
+gaussians_num.txt
+
+# Trajectory files
+*Trajectory*.txt

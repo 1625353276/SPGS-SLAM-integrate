@@ -1,1 +1,0 @@
-##[Gaussian Mapper]keyframe id, dssim

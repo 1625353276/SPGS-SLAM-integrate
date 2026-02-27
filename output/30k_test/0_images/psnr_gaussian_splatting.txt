@@ -1,1 +1,0 @@
-##[Gaussian Mapper]keyframe id, psnr_gaussian_splatting
