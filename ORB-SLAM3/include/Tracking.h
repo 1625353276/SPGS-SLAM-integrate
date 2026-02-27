@@ -35,6 +35,7 @@
 #include "KeyFrameDatabase.h"
 #include "ORBextractor.h"
 #include "Extractors/SPextractor.h"
+#include "Matchers/SPmatcher.h"
 #include "MapDrawer.h"
 #include "System.h"
 #include "ImuTypes.h"
@@ -277,6 +278,9 @@ protected:
     // Initalization (only for monocular)
     bool mbReadyToInitializate;
     bool mbSetInit;
+
+    // SuperPoint matcher
+    SPmatcher mspmatcher;
 
     //Local Map
     KeyFrame* mpReferenceKF;
