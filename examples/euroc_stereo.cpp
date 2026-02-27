@@ -283,15 +283,26 @@ int main(int argc, char **argv)
     std::cout << "DEBUG: poseSaved set to true" << std::endl;
 
     std::cout << "DEBUG: About to signal GaussianMapper to stop..." << std::endl;
-    pGausMapper->signalStop(true);
     std::cout << "DEBUG: About to call pSLAM->Shutdown()..." << std::endl;
     // Stop all threads
     pSLAM->Shutdown();
     std::cout << "DEBUG: pSLAM->Shutdown() completed" << std::endl;
+
+    // Wait for GaussianMapper to complete training to 30000 iterations
+    std::cout << "Waiting for GaussianMapper to complete training..." << std::endl;
+    const int max_iterations = 30000;
+    while (pGausMapper->getIteration() < max_iterations && !pGausMapper->isStopped()) {
+        std::this_thread::sleep_for(std::chrono::seconds(5));
+        int current_iter = pGausMapper->getIteration();
+        float progress = (float)current_iter / max_iterations * 100.0f;
+        std::cout << "Training progress: " << progress << "% (" << current_iter << "/" << max_iterations << ")" << std::endl;
+    }
+    std::cout << "GaussianMapper training completed at iteration: " << pGausMapper->getIteration() << std::endl;
+    std::cout << "DEBUG: About to signal GaussianMapper to stop..." << std::endl;
+    pGausMapper->signalStop(true);
     std::cout << "DEBUG: About to join training_thd..." << std::endl;
-    
-    // Simple join without timeout for now
-    // The GaussianMapper should exit quickly now with the fix
+
+    // Join the training thread
     try {
         training_thd.join();
         std::cout << "DEBUG: training_thd joined successfully" << std::endl;
