@@ -311,10 +311,12 @@ int main(int argc, char **argv)
     } catch (...) {
         std::cerr << "ERROR: Unknown exception while joining training_thd" << std::endl;
     }
-    if (use_viewer) {
+    if (use_viewer && viewer_thd.joinable()) {
         std::cout << "DEBUG: About to join viewer_thd..." << std::endl;
         viewer_thd.join();
         std::cout << "DEBUG: viewer_thd.join() completed" << std::endl;
+    } else {
+        std::cout << "DEBUG: Skipping viewer_thd.join() (use_viewer=" << use_viewer << ", joinable=" << viewer_thd.joinable() << ")" << std::endl;
     }
 
     // GPU peak usage
