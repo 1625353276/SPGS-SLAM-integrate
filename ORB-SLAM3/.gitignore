@@ -7,6 +7,11 @@
 # Unignore all dirs
 !*/
 
+# Vocabulary files (large binary files - must be after !*.*)
+Vocabulary/*.bin
+Vocabulary/*.yml
+Vocabulary/*.gz
+
 CMakeLists.txt.user
 CMakeLists_modified.txt
 
