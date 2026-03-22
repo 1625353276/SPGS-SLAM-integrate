@@ -16,6 +16,15 @@
 * If not, see <http://www.gnu.org/licenses/>.
 */
 
+// 调试模式开关：取消注释以启用详细调试输出
+// #define SPGS_DEBUG
+
+#ifdef SPGS_DEBUG
+#define DEBUG_LOG(msg) std::cout << msg << std::endl
+#else
+#define DEBUG_LOG(msg) ((void)0)
+#endif
+
 #include "Frame.h"
 
 #include "G2oTypes.h"
@@ -253,22 +262,22 @@ Frame::Frame(const cv::Mat &imLeft, const cv::Mat &imRight, const cv::Mat &imRGB
 #endif
 
     N = mvKeys.size();
-    cout << "Frame stereo (SP): N = " << N << " keypoints after extraction" << endl;
+    DEBUG_LOG("Frame stereo (SP): N = " << N << " keypoints after extraction");
     if(mvKeys.empty())
         return;
 
-    cout << "Frame stereo (SP): Calling UndistortKeyPoints..." << endl;
+    DEBUG_LOG("Frame stereo (SP): Calling UndistortKeyPoints...");
     UndistortKeyPoints();
-    cout << "Frame stereo (SP): UndistortKeyPoints completed" << endl;
+    DEBUG_LOG("Frame stereo (SP): UndistortKeyPoints completed");
 
 #ifdef REGISTER_TIMES
     std::chrono::steady_clock::time_point time_StartStereoMatches = std::chrono::steady_clock::now();
 #endif
-    cout << "Frame stereo (SP): mDescriptors type = " << mDescriptors.type() << ", size = " << mDescriptors.size() << endl;
-    cout << "Frame stereo (SP): mvKeysRight size = " << mvKeysRight.size() << ", mDescriptorsRight type = " << mDescriptorsRight.type() << endl;
-    cout << "Frame stereo (SP): Calling ComputeStereoMatches..." << endl;
+    DEBUG_LOG("Frame stereo (SP): mDescriptors type = " << mDescriptors.type() << ", size = " << mDescriptors.size());
+    DEBUG_LOG("Frame stereo (SP): mvKeysRight size = " << mvKeysRight.size() << ", mDescriptorsRight type = " << mDescriptorsRight.type());
+    DEBUG_LOG("Frame stereo (SP): Calling ComputeStereoMatches...");
     ComputeStereoMatches();
-    cout << "Frame stereo (SP): ComputeStereoMatches completed" << endl;
+    DEBUG_LOG("Frame stereo (SP): ComputeStereoMatches completed");
 #ifdef REGISTER_TIMES
     std::chrono::steady_clock::time_point time_EndStereoMatches = std::chrono::steady_clock::now();
 
@@ -764,9 +773,9 @@ void Frame::ExtractKeyPoints(int flag, const cv::Mat &im, const int x0, const in
 {
     vector<int> vLapping = {x0,x1};
     if(flag==0){
-        cout << "ExtractKeyPoints: Calling mpExtractorLeft for flag=0..." << endl;
+        DEBUG_LOG("ExtractKeyPoints: Calling mpExtractorLeft for flag=0...");
         monoLeft = (*mpExtractorLeft)(im,mvKeys,mDescriptors);
-        cout << "ExtractKeyPoints: Extracted " << mvKeys.size() << " keypoints" << endl;
+        DEBUG_LOG("ExtractKeyPoints: Extracted " << mvKeys.size() << " keypoints");
     }
     else
         monoRight = (*mpExtractorRight)(im,mvKeysRight,mDescriptorsRight);
@@ -1183,17 +1192,18 @@ void Frame::ComputeImageBounds(const cv::Mat &imLeft)
 
 void Frame::ComputeStereoMatches()
 {
-    cout << "ComputeStereoMatches: Starting..." << endl;
-    cout << "ComputeStereoMatches: N=" << N << ", mvKeys.size()=" << mvKeys.size() << ", mvKeysRight.size()=" << mvKeysRight.size() << endl;
-    cout << "ComputeStereoMatches: imgLeft size=" << imgLeft.rows << "x" << imgLeft.cols << ", imgRight size=" << imgRight.rows << "x" << imgRight.cols << endl;
-    cout << "ComputeStereoMatches: mDescriptors size=" << mDescriptors.rows << "x" << mDescriptors.cols << ", mDescriptorsRight size=" << mDescriptorsRight.rows << "x" << mDescriptorsRight.cols << endl;
+    DEBUG_LOG("ComputeStereoMatches: Starting...");
+    DEBUG_LOG("ComputeStereoMatches: N=" << N << ", mvKeys.size()=" << mvKeys.size() << ", mvKeysRight.size()=" << mvKeysRight.size());
+    DEBUG_LOG("ComputeStereoMatches: imgLeft size=" << imgLeft.rows << "x" << imgLeft.cols << ", imgRight size=" << imgRight.rows << "x" << imgRight.cols);
+    DEBUG_LOG("ComputeStereoMatches: mDescriptors size=" << mDescriptors.rows << "x" << mDescriptors.cols << ", mDescriptorsRight size=" << mDescriptorsRight.rows << "x" << mDescriptorsRight.cols);
 
     mvuRight = vector<float>(N,-1.0f);
     mvDepth = vector<float>(N,-1.0f);
 
-    cout << "ComputeStereoMatches: Initialized mvuRight and mvDepth" << endl;
+    DEBUG_LOG("ComputeStereoMatches: Initialized mvuRight and mvDepth");
 
-    const float thOrbDist = (1.4f+1.2f)/2;
+    // Use SPmatcher thresholds for SuperPoint features
+    const float thOrbDist = (SPmatcher::TH_HIGH+SPmatcher::TH_LOW)/2;
     
     const int nRows = imgLeft.rows;
 
@@ -1241,7 +1251,7 @@ void Frame::ComputeStereoMatches()
         if(maxU<0)
             continue;
 
-        float bestDist = 1.4f;
+        float bestDist = SPmatcher::TH_HIGH;
         size_t bestIdxR = 0;
 
         const cv::Mat &dL = mDescriptors.row(iL);
@@ -1259,7 +1269,7 @@ void Frame::ComputeStereoMatches()
             if(uR>=minU && uR<=maxU)
             {
                 const cv::Mat &dR = mDescriptorsRight.row(iR);
-                const float dist = cv::norm(dL,dR,cv::NORM_L2);
+                const float dist = SPmatcher::DescriptorDistance_sp(dL,dR);
 
                 if(dist<bestDist)
                 {

@@ -28,6 +28,8 @@
 #include <sstream>
 #include <thread>
 #include <filesystem>
+#include <atomic>
+#include <cmath>
 #include <map>
 #include <random>
 #include <mutex>
@@ -292,7 +294,7 @@ public:
     int64_t elapsed_time_from_start = 0; 
 
     std::unordered_map<int, std::vector<double>> pose_;
-    bool poseSaved = false;
+    std::atomic<bool> poseSaved{false};  // 使用 atomic 确保多线程可见性
     bool use_undistorted_image = false;
 
     std::vector<double>* vTimestamps;

@@ -26,6 +26,7 @@
 #include "Tracking.h"
 #include "KeyFrameDatabase.h"
 #include "Settings.h"
+#include "Matchers/SPmatcher.h"
 
 #include <mutex>
 
@@ -79,6 +80,7 @@ public:
     bool IsInitializing();
     double GetCurrKFTime();
     KeyFrame* GetCurrKF();
+    SPmatcher mspmatcher;
 
     std::mutex mMutexImuInit;
 

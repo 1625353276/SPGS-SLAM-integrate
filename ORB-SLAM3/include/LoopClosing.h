@@ -28,6 +28,7 @@
 #include "Tracking.h"
 
 #include "KeyFrameDatabase.h"
+#include "Matchers/SPmatcher.h"
 
 #include <boost/algorithm/string.hpp>
 #include <unordered_set>
@@ -177,6 +178,7 @@ protected:
     KeyFrame* mpCurrentKF;
     KeyFrame* mpLastCurrentKF;
     KeyFrame* mpMatchedKF;
+    SPmatcher mspmatcher;
     std::vector<ConsistentGroup> mvConsistentGroups;
     std::vector<KeyFrame*> mvpEnoughConsistentCandidates;
     std::vector<KeyFrame*> mvpCurrentConnectedKFs;

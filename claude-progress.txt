@@ -1152,3 +1152,121 @@ The GaussianMapper integration test demonstrates that the Pull-Based architectur
 ---
 **End of Session 5 (Part 2)**
 **Next Action**: Continue integration testing with Test 11 (Complete pipeline: Tracking + GaussianMapper)
+
+---
+
+## Session 6: Pose Update Debug - 训练与评估PSNR差异问题
+**Date**: 2026-03-21 ~ 2026-03-22
+**Session Type**: DEBUG SESSION
+**Status**: ⏳ IN PROGRESS
+
+## 问题描述
+
+训练时 PSNR 约为 18.65，但评估时 PSNR 仅约 8.11，存在显著差异。
+
+## 已解决的问题
+
+### 1. poseSaved 线程可见性问题
+**现象**: 位姿更新代码块 `if (pSLAM_->isShutDown() && !SLAM_ended_)` 未被执行
+**原因**: `bool poseSaved` 在不同线程间不可见
+**修复**: 
+- `gaussian_mapper.h`: `bool poseSaved` → `std::atomic<bool> poseSaved`
+- 添加 `#include <atomic>`
+
+### 2. TimeStamp 未初始化问题
+**现象**: GaussianKeyframe::TimeStamp 为 0 或垃圾值
+**原因**: 创建 GaussianKeyframe 时未复制 ORB_SLAM3::KeyFrame::mTimeStamp
+**修复**: 
+- `gaussian_mapper.cpp`: 添加 `new_kf->TimeStamp = pKF->mTimeStamp;`
+
+### 3. 位姿更新使用错误的变换方向
+**现象**: 位姿更新后 `large pose error` 仍然很大
+**原因**: `GetPoseInverse()` 返回 Twc，但 `setPose()` 期望 Tcw
+**修复**:
+- `gaussian_mapper.cpp:695-703`: `GetPoseInverse()` → `GetPose()`
+```cpp
+// 修复前
+Sophus::SE3f Twc = pKF->GetPoseInverse();
+
+// 修复后
+Sophus::SE3f Tcw = pKF->GetPose();
+```
+
+### 4. 评估坐标系不一致问题
+**现象**: 评估加载的位姿与 GaussianKeyframe 位姿不在同一坐标系
+**原因**: `SaveTrajectoryTUM` 使用 `Two` 变换将位姿转换到以第一个关键帧为原点的坐标系，但 GaussianKeyframe 存储的是原始 SLAM 坐标系中的位姿
+**修复**:
+- `euroc_stereo.cpp`: 不再从轨迹文件加载位姿，直接从 SLAM 系统获取帧位姿
+```cpp
+auto vpRefKFs = pGausMapper->pSLAM_->GetAllFrames();
+auto vRelativePoses = pGausMapper->pSLAM_->GetAllRelativeFramePoses();
+```
+
+### 5. 参考关键帧被剔除的处理
+**现象**: 很多帧的 `pose diff` 仍然很大 (0.1~0.3)
+**原因**: 参考关键帧被剔除 (`isBad()`) 后，需要沿父链找到有效关键帧并累积变换
+**修复**:
+```cpp
+// 如果参考关键帧被剔除，沿着父链找到有效关键帧并累积变换
+while (pRefKF->isBad()) {
+    Trw = Trw * pRefKF->mTcp;  // 累积变换
+    pRefKF = pRefKF->GetParent();
+}
+```
+
+## 当前剩余问题
+
+### 核心问题
+训练 PSNR 18.68，评估 PSNR 8.11，仍有较大差距
+
+### 原因分析
+1. **GaussianKeyframe 数量不匹配**:
+   - SLAM KeyFrame: 177
+   - Gaussian KeyFrame: 295
+   - 差值: 118 个孤立的 GaussianKeyframe
+
+2. **孤立 GaussianKeyframe 未更新**:
+   - 有 118 个 GaussianKeyframe 没有对应的 SLAM KeyFrame
+   - 这些是 SLAM 剔除的 "bad" 关键帧
+   - 它们的位姿未被更新，仍是旧的位姿
+
+3. **pose diff 仍有较大值**:
+   - 部分帧的位姿差异仍在 0.1~0.3 米
+
+### 可能的解决方案
+1. 对于没有匹配 SLAM KeyFrame 的 GaussianKeyframe，使用最近的相邻关键帧位姿插值
+2. 或者在 SLAM 期间就更新 GaussianKeyframe 位姿，而不是等结束后批量更新
+3. 删除没有对应 SLAM KeyFrame 的 GaussianKeyframe（如果它们确实是 bad 的）
+
+## 修改的文件
+
+1. `include/gaussian_mapper.h`
+   - `bool poseSaved` → `std::atomic<bool> poseSaved`
+   - 添加 `#include <atomic>`
+
+2. `src/gaussian_mapper.cpp`
+   - 添加 `new_kf->TimeStamp = pKF->mTimeStamp;`
+   - 位姿更新: `GetPoseInverse()` → `GetPose()`
+   - 使用 mnId 匹配 GaussianKeyframe 与 ORB_SLAM3::KeyFrame
+
+3. `examples/euroc_stereo.cpp`
+   - 不再从轨迹文件加载位姿
+   - 直接从 SLAM 系统获取帧位姿
+   - 添加参考关键帧被剔除的处理逻辑
+
+## 测试结果
+
+| 指标 | 训练时 | 评估时 |
+|------|--------|--------|
+| PSNR | ~18.68 | ~8.11 |
+| SSIM | ~0.71 | ~0.44 |
+
+## 下一步计划
+
+1. **分析孤立 GaussianKeyframe**: 确定这些关键帧是否应该被删除或插值
+2. **实时位姿更新**: 考虑在 SLAM 运行期间就更新 GaussianKeyframe 位姿
+3. **对比 SEGS-SLAM**: 检查 SEGS-SLAM 是否有类似问题及其解决方案
+
+---
+**End of Session 6 (Pending)**
+**Next Action**: 解决孤立 GaussianKeyframe 的位姿更新问题

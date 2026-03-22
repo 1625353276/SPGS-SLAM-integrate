@@ -20,6 +20,7 @@
 #include "LocalMapping.h"
 #include "LoopClosing.h"
 #include "ORBmatcher.h"
+#include "Matchers/SPmatcher.h"
 #include "Optimizer.h"
 #include "Converter.h"
 #include "GeometricTools.h"
@@ -33,7 +34,7 @@ namespace ORB_SLAM3
 LocalMapping::LocalMapping(System* pSys, Atlas *pAtlas, const float bMonocular, bool bInertial, const string &_strSeqName):
     mpSystem(pSys), mbMonocular(bMonocular), mbInertial(bInertial), mbResetRequested(false), mbResetRequestedActiveMap(false), mbFinishRequested(false), mbFinished(true), mpAtlas(pAtlas), bInitializing(false),
     mbAbortBA(false), mbStopped(false), mbStopRequested(false), mbNotStop(false), mbAcceptKeyFrames(true),
-    mIdxInit(0), mScale(1.0), mInitSect(0), mbNotBA1(true), mbNotBA2(true), mIdxIteration(0), infoInertial(Eigen::MatrixXd::Zero(9,9))
+    mIdxInit(0), mScale(1.0), mspmatcher(0.0), mInitSect(0), mbNotBA1(true), mbNotBA2(true), mIdxIteration(0), infoInertial(Eigen::MatrixXd::Zero(9,9))
 {
     mnMatchesInliers = 0;
 
@@ -414,7 +415,7 @@ void LocalMapping::CreateNewMapPoints()
 
     float th = 0.6f;
 
-    ORBmatcher matcher(th,false);
+    // Use mspmatcher (SPmatcher) for SuperPoint features
 
     Sophus::SE3<float> sophTcw1 = mpCurrentKeyFrame->GetPose();
     Eigen::Matrix<float,3,4> eigTcw1 = sophTcw1.matrix3x4();
@@ -468,7 +469,7 @@ void LocalMapping::CreateNewMapPoints()
         vector<pair<size_t,size_t> > vMatchedIndices;
         bool bCoarse = mbInertial && mpTracker->mState==Tracking::RECENTLY_LOST && mpCurrentKeyFrame->GetMap()->GetIniertialBA2();
 
-        matcher.SearchForTriangulation(mpCurrentKeyFrame,pKF2,vMatchedIndices,false,bCoarse);
+        mspmatcher.SearchForTriangulation(mpCurrentKeyFrame,pKF2,vMatchedIndices,false,bCoarse);
 
         Sophus::SE3<float> sophTcw2 = pKF2->GetPose();
         Eigen::Matrix<float,3,4> eigTcw2 = sophTcw2.matrix3x4();
@@ -778,14 +779,14 @@ void LocalMapping::SearchInNeighbors()
     }
 
     // Search matches by projection from current KF in target KFs
-    ORBmatcher matcher;
+    // Use mspmatcher (SPmatcher) for SuperPoint features
     vector<MapPoint*> vpMapPointMatches = mpCurrentKeyFrame->GetMapPointMatches();
     for(vector<KeyFrame*>::iterator vit=vpTargetKFs.begin(), vend=vpTargetKFs.end(); vit!=vend; vit++)
     {
         KeyFrame* pKFi = *vit;
 
-        matcher.Fuse(pKFi,vpMapPointMatches);
-        if(pKFi->NLeft != -1) matcher.Fuse(pKFi,vpMapPointMatches,true);
+        mspmatcher.Fuse(pKFi,vpMapPointMatches);
+        if(pKFi->NLeft != -1) mspmatcher.Fuse(pKFi,vpMapPointMatches,true);
     }
 
 
@@ -814,8 +815,8 @@ void LocalMapping::SearchInNeighbors()
         }
     }
 
-    matcher.Fuse(mpCurrentKeyFrame,vpFuseCandidates);
-    if(mpCurrentKeyFrame->NLeft != -1) matcher.Fuse(mpCurrentKeyFrame,vpFuseCandidates,true);
+    mspmatcher.Fuse(mpCurrentKeyFrame,vpFuseCandidates);
+    if(mpCurrentKeyFrame->NLeft != -1) mspmatcher.Fuse(mpCurrentKeyFrame,vpFuseCandidates,true);
 
 
     // Update points

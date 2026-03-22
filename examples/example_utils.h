@@ -86,8 +86,9 @@ inline void LoadTrajectory(const std::string &filePath, std::unordered_map<doubl
         }
 
         if (!row.empty()) {
-            data[row[0]] = row; // 将行数据存储到哈希表中
-            // std::cout << "LoadTrajectory: " << row[0] << std::endl;
+            // 四舍五入时间戳到微秒精度，确保与保存时精度一致
+            double rounded_ts = std::round(row[0] * 1e6) / 1e6;
+            data[rounded_ts] = row;
         }
     }
 

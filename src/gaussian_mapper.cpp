@@ -550,6 +550,7 @@ void GaussianMapper::run()
                     new_kf->zfar_ = z_far_;
                     new_kf->znear_ = z_near_;
                     new_kf->frameID = pKF->frameID;
+                    new_kf->TimeStamp = pKF->mTimeStamp;  // 修复：设置时间戳用于后续位姿更新
                     auto pose = pKF->GetPose();
                     new_kf->setPose(
                         pose.unit_quaternion().cast<double>(),
@@ -679,26 +680,111 @@ void GaussianMapper::run()
 
         if (pSLAM_->isShutDown() && !SLAM_ended_ ) {
             SLAM_ended_ = true;
-            std::cout << "SLAM finished at" << getIteration() << std::endl;
+            std::cout << "SLAM finished (isShutDown) at iteration " << getIteration() << std::endl;
 
+            // 使用 SEGS-SLAM 的方法：通过 frameID + poseT_ 更新位姿
+            // 这样即使 KeyFrame 被 SLAM 剔除，也能从轨迹文件获取位姿
             if(this->poseSaved)
             {
-                std::vector<ORB_SLAM3::KeyFrame*> vpKFs = pSLAM_->getAtlas()->GetAllKeyFrames();
                 std::size_t nkfs = scene_->keyframes().size();
                 auto kfit = scene_->keyframes().begin();
-                std::unordered_map<std::size_t, ORB_SLAM3::KeyFrame*> kfMap;
-                for (const auto& pKF : vpKFs) {
-                    kfMap[pKF->frameID] = pKF;
-                }
+                
+                std::cout << "Gaussian KeyFrames: " << nkfs << std::endl;
 
                 int update_poses = 0;
+                int not_found_count = 0;
                 for (std::size_t i = 0; i < nkfs; ++i)
                 {
-                    auto mnId = (*kfit).second->frameID;
-                    if (this->sensor_type_ == MONOCULAR)
-                    {
-                        if(vTimestamps != nullptr){
-                            double timeStamp = (*vTimestamps)[mnId];
+                    // 使用 frameID（帧序列号）而不是 mnId
+                    // frameID 是创建该 KeyFrame 的帧序号，与轨迹文件中的行号对应
+                    auto frameID = (*kfit).second->frameID;
+                    
+                    // 从 poseT_ 查找位姿（时间戳作为 key）
+                    bool pose_updated = false;
+                    if (vTimestamps != nullptr && frameID < vTimestamps->size()) {
+                        double timeStamp = (*vTimestamps)[frameID];
+                        auto found = this->poseT_.find(timeStamp);
+                        if (found != this->poseT_.end())
+                        {
+                            // TUM 格式: tx ty tz qx qy qz qw (Twc: world to camera)
+                            auto Tw2c = found->second;
+                            Eigen::Vector3d pose_trans(Tw2c[1], Tw2c[2], Tw2c[3]);
+                            Eigen::Quaterniond pose_rot(Tw2c[7], Tw2c[4], Tw2c[5], Tw2c[6]);
+                            Sophus::SE3d pose(pose_rot, pose_trans);
+                            // TUM 格式存的是 Twc，需要转换为 Tcw
+                            Sophus::SE3d Tc2w = pose.inverse();
+                            auto c2w_q = Tc2w.unit_quaternion();
+                            auto c2w_t = Tc2w.translation();
+
+                            (*kfit).second->setPose(c2w_q, c2w_t);
+                            (*kfit).second->computeTransformTensors();
+                            update_poses++;
+                            pose_updated = true;
+                        }
+                    }
+                    
+                    // 如果 poseT_ 查找失败，尝试从 pose_ 查找（行号作为 key）
+                    if (!pose_updated) {
+                        auto found = this->pose_.find(frameID);
+                        if (found != this->pose_.end())
+                        {
+                            auto Tw2c = found->second;
+                            Eigen::Vector3d pose_trans(Tw2c[1], Tw2c[2], Tw2c[3]);
+                            Eigen::Quaterniond pose_rot(Tw2c[7], Tw2c[4], Tw2c[5], Tw2c[6]);
+                            Sophus::SE3d pose(pose_rot, pose_trans);
+                            Sophus::SE3d Tc2w = pose.inverse();
+                            auto c2w_q = Tc2w.unit_quaternion();
+                            auto c2w_t = Tc2w.translation();
+
+                            (*kfit).second->setPose(c2w_q, c2w_t);
+                            (*kfit).second->computeTransformTensors();
+                            update_poses++;
+                            pose_updated = true;
+                        }
+                    }
+                    
+                    if (!pose_updated) {
+                        not_found_count++;
+                        if (not_found_count <= 5) {
+                            std::cout << "Pose not found for frameID=" << frameID << std::endl;
+                        }
+                    }
+
+                    ++kfit;
+                }
+                std::cout << "update pose: " << update_poses << " (not found: " << not_found_count << ")" << std::endl;
+            }
+            else
+            {
+                std::cout << "WARNING: poseSaved is false, skipping pose update" << std::endl;
+            }
+            if(light_mode)
+                break;
+        }
+
+        if (getIteration() >= opt_params_.iterations_) {
+            // 在达到最大迭代次数退出前，执行位姿更新
+            std::cout << "Reached max iterations " << getIteration() << ", SLAM_ended_=" << SLAM_ended_ << std::endl;
+            if (!SLAM_ended_) {
+                SLAM_ended_ = true;
+                std::cout << "SLAM finished (max iterations) at " << getIteration() << std::endl;
+                
+                // 使用 SEGS-SLAM 的方法
+                if(this->poseSaved)
+                {
+                    std::size_t nkfs = scene_->keyframes().size();
+                    auto kfit = scene_->keyframes().begin();
+                    
+                    std::cout << "Gaussian KeyFrames: " << nkfs << std::endl;
+                    
+                    int update_poses = 0;
+                    int not_found_count = 0;
+                    for (std::size_t i = 0; i < nkfs; ++i) {
+                        auto frameID = (*kfit).second->frameID;
+                        
+                        bool pose_updated = false;
+                        if (vTimestamps != nullptr && frameID < vTimestamps->size()) {
+                            double timeStamp = (*vTimestamps)[frameID];
                             auto found = this->poseT_.find(timeStamp);
                             if (found != this->poseT_.end())
                             {
@@ -712,12 +798,13 @@ void GaussianMapper::run()
 
                                 (*kfit).second->setPose(c2w_q, c2w_t);
                                 (*kfit).second->computeTransformTensors();
-
                                 update_poses++;
+                                pose_updated = true;
                             }
                         }
-                        else{
-                            auto found = this->pose_.find(mnId);
+                        
+                        if (!pose_updated) {
+                            auto found = this->pose_.find(frameID);
                             if (found != this->pose_.end())
                             {
                                 auto Tw2c = found->second;
@@ -730,41 +817,22 @@ void GaussianMapper::run()
 
                                 (*kfit).second->setPose(c2w_q, c2w_t);
                                 (*kfit).second->computeTransformTensors();
-
                                 update_poses++;
+                                pose_updated = true;
                             }
                         }
+                        
+                        if (!pose_updated) {
+                            not_found_count++;
+                        }
+                        
+                        ++kfit;
                     }
-
-                    if (this->sensor_type_ != MONOCULAR){
-                    auto found = this->pose_.find(mnId);
-                    if (found != this->pose_.end())
-                    {
-                        auto Tw2c = found->second;
-                        Eigen::Vector3d pose_trans(Tw2c[1], Tw2c[2], Tw2c[3]);
-                        Eigen::Quaterniond pose_rot(Tw2c[7], Tw2c[4], Tw2c[5], Tw2c[6]);
-                        Sophus::SE3d pose(pose_rot, pose_trans);
-                        Sophus::SE3d Tc2w = pose.inverse();
-                        auto c2w_q = Tc2w.unit_quaternion();
-                        auto c2w_t = Tc2w.translation();
-
-                        (*kfit).second->setPose(c2w_q, c2w_t);
-                        (*kfit).second->computeTransformTensors();
-
-                        update_poses++;
-                    }
-                    }
-
-                    ++kfit;
+                    std::cout << "update pose: " << update_poses << " (not found: " << not_found_count << ")" << std::endl;
                 }
-                std::cout << "update pose: " << update_poses << std::endl;
             }
-            if(light_mode)
-                break;
-        }
-
-        if (getIteration() >= opt_params_.iterations_)
             break;
+        }
     }
 
     if(light_mode){
@@ -2048,6 +2116,7 @@ void GaussianMapper::renderAndRecordAllframes(std::vector<ORB_SLAM3::KeyFrame*> 
         auto pKF = vpFs[idx];
 
         std::shared_ptr<GaussianKeyframe> new_kf = std::make_shared<GaussianKeyframe>(pKF->mnId, getIteration());
+        new_kf->TimeStamp = pKF->mTimeStamp;  // 修复：设置时间戳
         auto pose = pKF->mTcw_eval;
         new_kf->setPose(
             pose.unit_quaternion().cast<double>(),

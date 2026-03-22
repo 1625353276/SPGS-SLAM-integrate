@@ -16,6 +16,15 @@
 * If not, see <http://www.gnu.org/licenses/>.
 */
 
+// 调试模式开关：取消注释以启用详细调试输出
+// #define SPGS_DEBUG
+
+#ifdef SPGS_DEBUG
+#define DEBUG_LOG(msg) std::cout << msg << std::endl
+#else
+#define DEBUG_LOG(msg) ((void)0)
+#endif
+
 
 #include "Tracking.h"
 
@@ -2387,14 +2396,14 @@ void Tracking::Track()
 
             // Debug output for STEREO mode
             if(mSensor==System::STEREO) {
-                std::cout << "[KF Debug] bNeedKF=" << bNeedKF << " bOK=" << bOK << std::endl;
+                DEBUG_LOG("[KF Debug] bNeedKF=" << bNeedKF << " bOK=" << bOK);
             }
 
             // Check if we need to insert a new keyframe
             // if(bNeedKF && bOK)
             if(bNeedKF && (bOK || (mInsertKFsLost && mState==RECENTLY_LOST &&
                                    (mSensor == System::IMU_MONOCULAR || mSensor == System::IMU_STEREO || mSensor == System::IMU_RGBD)))) {
-                std::cout << "[KF Debug] Creating new keyframe" << std::endl;
+                DEBUG_LOG("[KF Debug] Creating new keyframe");
                 CreateNewKeyFrame();
             }
 
@@ -2707,8 +2716,8 @@ void Tracking::CreateInitialMapMonocular()
         pKFini->mpImuPreintegrated = (IMU::Preintegrated*)(NULL);
 
 
-    pKFini->ComputeBoW();
-    pKFcur->ComputeBoW();
+    pKFini->ComputeBoW3();
+    pKFcur->ComputeBoW3();
 
     // Insert KFs in the map
     mpAtlas->AddKeyFrame(pKFini);
@@ -3087,7 +3096,7 @@ bool Tracking::TrackWithMotionModel()
 
     }
 
-    if(nmatches<20)
+    if(nmatches<10)//20  // Reduced from 20 to match Rover-SLAM
     {
         Verbose::PrintMess("Not enough matches!!", Verbose::VERBOSITY_NORMAL);
         if (mSensor == System::IMU_MONOCULAR || mSensor == System::IMU_STEREO || mSensor == System::IMU_RGBD)
@@ -3382,15 +3391,14 @@ bool Tracking::NeedNewKeyFrame()
     const bool c2 = (((mnMatchesInliers<nRefMatches*thRefRatio || bNeedToInsertClose)) && mnMatchesInliers>15);
     // Debug output for STEREO mode
     if(mSensor==System::STEREO) {
-        std::cout << "[KF Debug] mnMatchesInliers=" << mnMatchesInliers 
+        DEBUG_LOG("[KF Debug] mnMatchesInliers=" << mnMatchesInliers 
                   << " nRefMatches=" << nRefMatches 
                   << " thRefRatio=" << thRefRatio
                   << " nRefMatches*thRefRatio=" << nRefMatches*thRefRatio
                   << " c2=" << c2
                   << " c1a=" << c1a
                   << " c1b=" << c1b
-                  << " c1c=" << c1c
-                  << std::endl;
+                  << " c1c=" << c1c);
     }
 
     //std::cout << "NeedNewKF: c1a=" << c1a << "; c1b=" << c1b << "; c1c=" << c1c << "; c2=" << c2 << std::endl;
@@ -3841,7 +3849,7 @@ bool Tracking::Relocalization()
 {
     Verbose::PrintMess("Starting relocalization", Verbose::VERBOSITY_NORMAL);
     // Compute Bag of Words Vector
-    mCurrentFrame.ComputeBoW();
+    mCurrentFrame.ComputeBoW3();  // Use SuperPoint vocabulary for relocalization
 
     // Relocalization is performed when tracking is lost
     // Track Lost: Query KeyFrame Database for keyframe candidates for relocalisation

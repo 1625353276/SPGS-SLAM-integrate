@@ -40,7 +40,8 @@ void KeyFrameDatabase::add(KeyFrame *pKF)
 {
     unique_lock<mutex> lock(mMutex);
 
-    for(DBoW3::BowVector::const_iterator vit= pKF->mBowVec.begin(), vend=pKF->mBowVec.end(); vit!=vend; vit++)
+    // Use mBow3Vec for SuperPoint vocabulary
+    for(DBoW3::BowVector::const_iterator vit= pKF->mBow3Vec.begin(), vend=pKF->mBow3Vec.end(); vit!=vend; vit++)
         mvInvertedFile[vit->first].push_back(pKF);
 }
 
@@ -56,7 +57,8 @@ void KeyFrameDatabase::erase(KeyFrame* pKF)
     unique_lock<mutex> lock(mMutex);
 
     // Erase elements in the Inverse File for the entry
-    for(DBoW3::BowVector::const_iterator vit=pKF->mBowVec.begin(), vend=pKF->mBowVec.end(); vit!=vend; vit++)
+    // Use mBow3Vec for SuperPoint vocabulary
+    for(DBoW3::BowVector::const_iterator vit=pKF->mBow3Vec.begin(), vend=pKF->mBow3Vec.end(); vit!=vend; vit++)
     {
         // List of keyframes that share the word
         list<KeyFrame*> &lKFs =   mvInvertedFile[vit->first];
@@ -742,12 +744,13 @@ vector<KeyFrame*> KeyFrameDatabase::DetectRelocalizationCandidates(Frame *F, Map
     list<KeyFrame*> lKFsSharingWords;
 
     // Search all keyframes that share a word with current frame
+    // Use SuperPoint vocabulary (mBow3Vec and mvInvertedFile_sp)
     {
         unique_lock<mutex> lock(mMutex);
 
-        for(DBoW3::BowVector::const_iterator vit=F->mBowVec.begin(), vend=F->mBowVec.end(); vit != vend; vit++)
+        for(DBoW3::BowVector::const_iterator vit=F->mBow3Vec.begin(), vend=F->mBow3Vec.end(); vit != vend; vit++)
         {
-            list<KeyFrame*> &lKFs =   mvInvertedFile[vit->first];
+            list<KeyFrame*> &lKFs = mvInvertedFile_sp[vit->first];
 
             for(list<KeyFrame*>::iterator lit=lKFs.begin(), lend= lKFs.end(); lit!=lend; lit++)
             {
@@ -779,7 +782,7 @@ vector<KeyFrame*> KeyFrameDatabase::DetectRelocalizationCandidates(Frame *F, Map
 
     int nscores=0;
 
-    // Compute similarity score.
+    // Compute similarity score using SuperPoint vocabulary (mBow3Vec)
     for(list<KeyFrame*>::iterator lit=lKFsSharingWords.begin(), lend= lKFsSharingWords.end(); lit!=lend; lit++)
     {
         KeyFrame* pKFi = *lit;
@@ -787,7 +790,7 @@ vector<KeyFrame*> KeyFrameDatabase::DetectRelocalizationCandidates(Frame *F, Map
         if(pKFi->mnRelocWords>minCommonWords)
         {
             nscores++;
-            float si = mpVoc->score(F->mBowVec,pKFi->mBowVec);
+            float si = mpVoc->score(F->mBow3Vec,pKFi->mBow3Vec);
             pKFi->mRelocScore=si;
             lScoreAndMatch.push_back(make_pair(si,pKFi));
         }
