@@ -84,12 +84,13 @@ IMU.fastInit: 1
 #--------------------------------------------------------------------------------------------
 
 # ORB Extractor: Number of features per image
-ORBextractor.nFeatures: 1200
+ORBextractor.nFeatures: 10000
 
 # ORB Extractor: Scale factor between levels in the scale pyramid
 ORBextractor.scaleFactor: 1.2
 
 # ORB Extractor: Number of levels in the scale pyramid
+# Set to 1 for single-scale SuperPoint extraction test
 ORBextractor.nLevels: 1
 
 # ORB Extractor: Fast threshold

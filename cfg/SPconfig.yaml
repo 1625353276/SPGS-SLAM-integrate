@@ -11,9 +11,9 @@ SuperPoint.modelPath: "bin/onnxmodel/superpoint.onnx"
 SuperPoint.device: "cuda"
 
 # SuperPoint extractor parameters
-SuperPoint.nFeatures: 1000
+SuperPoint.nFeatures: 10000
 SuperPoint.scaleFactor: 1.2
-SuperPoint.nLevels: 8
+SuperPoint.nLevels: 1
 SuperPoint.iniThFAST: 20
 SuperPoint.minThFAST: 7
 

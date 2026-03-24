@@ -10,8 +10,8 @@ using namespace std;
 
 namespace ORB_SLAM3
 {
-    const float SPmatcher::TH_HIGH = 1.0;  // Reduced from 1.4
-    const float SPmatcher::TH_LOW = 0.8;   // Reduced from 1.2
+    const float SPmatcher::TH_HIGH = 1.0;  // Rover-SLAM original value
+    const float SPmatcher::TH_LOW = 0.8;   // Rover-SLAM original value
     const int SPmatcher::HISTO_LENGTH = 30;
 
 SPmatcher::SPmatcher(float thre)

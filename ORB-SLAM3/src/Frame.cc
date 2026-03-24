@@ -1602,6 +1602,9 @@ Frame::Frame(const cv::Mat &imLeft, const cv::Mat &imRight, const double &timeSt
 
     
 
+        // Always initialize mpMutexImu, even if N == 0
+        mpMutexImu = new std::mutex();
+
         if(N == 0)
 
             return;

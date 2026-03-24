@@ -148,6 +148,12 @@ public:
     // Initialization Variables (Monocular)
     std::vector<int> mvIniLastMatches;
     std::vector<int> mvIniMatches;
+
+    // Adaptive threshold for SuperPoint feature extraction
+    float lastmatchtrack = 0;
+    
+    // Update lastmatchnum for adaptive threshold (called from LocalMapping)
+    void UpdateLastMatchNum(float matchmean);
     std::vector<Eigen::Vector3f> mvIniColorRGB;
     std::vector<cv::Point2f> mvbPrevMatched;
     std::vector<cv::Point3f> mvIniP3D;

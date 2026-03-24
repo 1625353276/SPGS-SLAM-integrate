@@ -17,8 +17,9 @@ VOCAB_PATH="ORB-SLAM3/Vocabulary/SPvoc.bin"  # 使用二进制词袋，加载更
 SETTINGS_PATH="cfg/ORB_SLAM3/Stereo/EuRoC/EuRoC_V201.yaml"
 GAUSSIAN_CFG_PATH="cfg/gaussian_mapper/Stereo/EuRoC/EuRoC.yaml"
 SEQUENCE_PATH="/home/ubuntu/vicon_room2/V2_01_easy"
-TIMESTAMPS_PATH="cfg/ORB_SLAM3/Stereo/EuRoC/EuRoC_TimeStamps/V201.txt"
-OUTPUT_DIR="output/euroc_V2_01_easy"
+# 时间戳文件：使用数据集自带的 data.csv（格式：timestamp,filename）
+TIMESTAMPS_PATH="$SEQUENCE_PATH/mav0/cam0/data.csv"
+OUTPUT_DIR="output/test_lastmatch_impl"
 
 # 检查必要文件
 echo "检查必要文件..."

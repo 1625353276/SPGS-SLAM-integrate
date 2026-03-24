@@ -71,6 +71,10 @@
 using namespace cv;
 using namespace std;
 
+// Debug mode for multi-scale extraction
+// Uncomment the line below to enable debug output
+// #define SPGS_DEBUG_MULTISCALE
+
 namespace ORB_SLAM3
 {
 
@@ -115,11 +119,6 @@ SPextractor::SPextractor(int _nfeatures, float _scaleFactor, int _nlevels,
         mvScaleFactor[i]=mvScaleFactor[i-1]*scaleFactor;
         mvLevelSigma2[i]=mvScaleFactor[i]*mvScaleFactor[i];
     }
-    for(int i = 0; i < mvLevelSigma2.size(); i++)
-    {
-        cout<<mvLevelSigma2[i]<<" assd";
-    }
-    cout<<endl;
     mvInvScaleFactor.resize(nlevels);
     mvInvLevelSigma2.resize(nlevels);
     for(int i=0; i<nlevels; i++)
@@ -524,14 +523,13 @@ int SPextractor::operator()( InputArray _image,  vector<KeyPoint>& _keypoints,
     //cout << typeToString(image.type());
     assert(image.type() == CV_8UC1 );
 
-    Mat descriptors;
     //两种模式，一种单层图像提取特征，一种多层金字塔提取特征
     int res = -1;
     if (nlevels == 1) 
         res = ExtractSingleLayer(image, _keypoints, _descriptors);
     else{
         ComputePyramid(image);
-        res = ExtractMultiLayers(image, _keypoints, descriptors);
+        res = ExtractMultiLayers(image, _keypoints, _descriptors);
     }
     // Pre-compute the scale pyramid
 
@@ -618,36 +616,137 @@ int SPextractor::ExtractSingleLayer(const cv::Mat &image, std::vector<cv::KeyPoi
 
 int SPextractor::ExtractMultiLayers(const cv::Mat &image, std::vector<cv::KeyPoint>& vKeyPoints, cv::Mat &Descriptors)
 {
-    ComputePyramid(image);
+    // Note: ComputePyramid is already called in operator() before this function
+#ifdef SPGS_DEBUG_MULTISCALE
+    std::cout << "[ExtractMultiLayers] Starting multi-scale extraction, nlevels=" << nlevels << std::endl;
+#endif
+    
     int nKeyPoints = 0;
     vector<vector<cv::KeyPoint>> allKeypoints(nlevels);
     vector<cv::Mat> allDescriptors(nlevels);
+    
+    // Multi-scale SuperPoint extraction: run inference on each pyramid level
     for (int level = 0; level < nlevels; ++level)
     {
-        if(level == 0)
-        {
-            // if (!mModel->infer(mvImagePyramid[level], allKeypoints[level], allDescriptors[level], nfeatures))
-            // cerr << "Error while detecting keypoints" << endl;
+#ifdef SPGS_DEBUG_MULTISCALE
+        std::cout << "[ExtractMultiLayers] Processing level " << level << std::endl;
+#endif
+        if(mModelstr == "onnx"){
+            Configuration cfg;
+#ifdef SPGS_DEBUG_MULTISCALE
+            std::cout << "[ExtractMultiLayers] Cloning pyramid image, size=" 
+                      << mvImagePyramid[level].cols << "x" << mvImagePyramid[level].rows << std::endl;
+#endif
+            cv::Mat image_copy = mvImagePyramid[level].clone();
+#ifdef SPGS_DEBUG_MULTISCALE
+            std::cout << "[ExtractMultiLayers] Normalizing image..." << std::endl;
+#endif
+            cv::Mat inputImage = NormalizeImage(image_copy);
+#ifdef SPGS_DEBUG_MULTISCALE
+            std::cout << "[ExtractMultiLayers] Running inference..." << std::endl;
+#endif
+            featureExtractor->lastmatch = lastmatchnum;
+            featureExtractor->Extractor_Inference(cfg, inputImage);
+#ifdef SPGS_DEBUG_MULTISCALE
+            std::cout << "[ExtractMultiLayers] Post-processing..." << std::endl;
+#endif
+            featureExtractor->Extractor_PostProcess(cfg, std::move(featureExtractor->extractor_outputtensors[0]), 
+                                                      allKeypoints[level], allDescriptors[level]);
+#ifdef SPGS_DEBUG_MULTISCALE
+            std::cout << "[ExtractMultiLayers] Level " << level << " extracted " 
+                      << allKeypoints[level].size() << " keypoints, descriptor: "
+                      << allDescriptors[level].rows << "x" << allDescriptors[level].cols << std::endl;
+#endif
         }
-        else
-        {
-            // if (!mModel->infer(mvImagePyramid[level], allKeypoints[level], allDescriptors[level], nfeatures))//toDo 构建模型Vector
-            // cerr << "Error while detecting keypoints" << endl;
-        }
-        nKeyPoints +=allKeypoints[level].size();
+        nKeyPoints += allKeypoints[level].size();
     }
+#ifdef SPGS_DEBUG_MULTISCALE
+    std::cout << "[ExtractMultiLayers] Total keypoints: " << nKeyPoints << std::endl;
+#endif
+    
     vKeyPoints.clear();
     vKeyPoints.reserve(nKeyPoints);
+    
+    // Count total descriptor rows and check descriptor dimensions
+    int totalDescRows = 0;
+    int descCols = 0;
     for (int level = 0; level < nlevels; ++level)
     {
-        for(auto keypoint : allKeypoints[level])
+        if(!allDescriptors[level].empty() && allDescriptors[level].rows > 0)
         {
-            keypoint.octave = level;
-            keypoint.pt *= mvScaleFactor[level];
-            vKeyPoints.emplace_back(keypoint);
+            totalDescRows += allDescriptors[level].rows;
+            if(descCols == 0)
+                descCols = allDescriptors[level].cols;
         }
     }
-    cv::vconcat(allDescriptors.data(), allDescriptors.size(), Descriptors);
+    
+    // Pre-allocate output descriptors matrix
+    if(totalDescRows > 0 && descCols > 0)
+    {
+        Descriptors.create(totalDescRows, descCols, CV_32F);
+        int rowOffset = 0;
+        
+        for (int level = 0; level < nlevels; ++level)
+        {
+            // Scale keypoints coordinates back to original image
+            // Following ORBextractor convention: only scale for level != 0
+            if (level != 0)
+            {
+                float scale = mvScaleFactor[level];
+                for(auto& keypoint : allKeypoints[level])
+                {
+                    keypoint.octave = level;
+                    keypoint.pt *= scale;
+                    keypoint.size *= scale;  // Scale size to match original image coordinates
+                    vKeyPoints.emplace_back(keypoint);
+                }
+            }
+            else
+            {
+                // level 0: no scaling needed, just set octave
+                for(auto& keypoint : allKeypoints[level])
+                {
+                    keypoint.octave = level;
+                    vKeyPoints.emplace_back(keypoint);
+                }
+            }
+            
+            // Copy descriptors row by row
+            if(!allDescriptors[level].empty() && allDescriptors[level].rows > 0)
+            {
+                cv::Mat roi = Descriptors.rowRange(rowOffset, rowOffset + allDescriptors[level].rows);
+                allDescriptors[level].copyTo(roi);
+                rowOffset += allDescriptors[level].rows;
+            }
+        }
+    }
+    else
+    {
+        // No valid descriptors, still collect keypoints
+        for (int level = 0; level < nlevels; ++level)
+        {
+            if (level != 0)
+            {
+                float scale = mvScaleFactor[level];
+                for(auto& keypoint : allKeypoints[level])
+                {
+                    keypoint.octave = level;
+                    keypoint.pt *= scale;
+                    keypoint.size *= scale;
+                    vKeyPoints.emplace_back(keypoint);
+                }
+            }
+            else
+            {
+                for(auto& keypoint : allKeypoints[level])
+                {
+                    keypoint.octave = level;
+                    vKeyPoints.emplace_back(keypoint);
+                }
+            }
+        }
+        Descriptors = cv::Mat();
+    }
     
     return vKeyPoints.size();
 }
@@ -685,7 +784,9 @@ int SPextractor::ExtractMultiLayers(const cv::Mat &image, std::vector<cv::KeyPoi
 
 void SPextractor::ComputePyramid(cv::Mat image)
 {
-    std::cout<<" compute pyramid !"<<std::endl;
+#ifdef SPGS_DEBUG_MULTISCALE
+    std::cout << "[ComputePyramid] Building pyramid with " << nlevels << " levels" << std::endl;
+#endif
     for (int level = 0; level < nlevels; ++level)
     {
         float scale = mvInvScaleFactor[level];

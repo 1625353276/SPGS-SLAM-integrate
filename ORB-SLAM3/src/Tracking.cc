@@ -3346,16 +3346,16 @@ bool Tracking::NeedNewKeyFrame()
     if ((mSensor == System::RGBD && this->mImGray.size[0] == 680 && this->mImGray.size[1] == 1200) ||
         mSensor==System::STEREO) // replica
     {
-        thRefRatio = 0.75f;
+        thRefRatio = 0.98f;  // Raised to 0.98 to trigger c2 condition more easily
         mMaxFrames_temp = mMaxFrames;
-        mMaxFrames = 15;
+        mMaxFrames = 5;  // Reduced to 5 for more frequent keyframe checks
     }
     if ((mSensor == System::RGBD && this->mImGray.size[0] == 480 && this->mImGray.size[1] == 640) ||
         mSensor==System::STEREO) // Scannet
     {
-        thRefRatio = 0.75f;
+        thRefRatio = 0.98f;  // Raised to 0.98 to trigger c2 condition more easily
         mMaxFrames_temp = mMaxFrames;
-        mMaxFrames = 15;
+        mMaxFrames = 5;  // Reduced to 5 for more frequent keyframe checks
     }
 
     if((mSensor == System::MONOCULAR && this->mImGray.size[0] == 680 && this->mImGray.size[1] == 1200))
@@ -3462,6 +3462,9 @@ void Tracking::CreateNewKeyFrame()
         return;
 
     KeyFrame* pKF = new KeyFrame(mCurrentFrame,mpAtlas->GetCurrentMap(),mpKeyFrameDB);
+
+    // Log keyframe features count
+    std::cout << "[KF Features] KF ID: " << pKF->mnId << " Features: " << pKF->N << std::endl;
 
     if(mpAtlas->isImuInitialized()) //  || mpLocalMapper->IsInitializing())
         pKF->bImu = true;
@@ -4011,6 +4014,15 @@ bool Tracking::Relocalization()
         return true;
     }
 
+}
+
+void Tracking::UpdateLastMatchNum(float matchmean)
+{
+    lastmatchtrack = matchmean;
+    if(mpExtractorLeft)
+        mpExtractorLeft->lastmatchnum = matchmean;
+    if(mpIniExtractor)
+        mpIniExtractor->lastmatchnum = matchmean;
 }
 
 void Tracking::Reset(bool bLocMap)

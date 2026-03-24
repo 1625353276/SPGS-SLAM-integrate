@@ -436,6 +436,10 @@ void LocalMapping::CreateNewMapPoints()
     int countStereoGoodProj = 0;
     int countStereoAttempt = 0;
     int totalStereoPts = 0;
+    
+    // For adaptive threshold calculation
+    float matchsum = 0;
+    
     // Search matches with epipolar restriction and triangulate
     for(size_t i=0; i<vpNeighKFs.size(); i++)
     {
@@ -469,7 +473,8 @@ void LocalMapping::CreateNewMapPoints()
         vector<pair<size_t,size_t> > vMatchedIndices;
         bool bCoarse = mbInertial && mpTracker->mState==Tracking::RECENTLY_LOST && mpCurrentKeyFrame->GetMap()->GetIniertialBA2();
 
-        mspmatcher.SearchForTriangulation(mpCurrentKeyFrame,pKF2,vMatchedIndices,false,bCoarse);
+        int nMatchSize = mspmatcher.SearchForTriangulation(mpCurrentKeyFrame,pKF2,vMatchedIndices,false,bCoarse);
+        matchsum += nMatchSize;
 
         Sophus::SE3<float> sophTcw2 = pKF2->GetPose();
         Eigen::Matrix<float,3,4> eigTcw2 = sophTcw2.matrix3x4();
@@ -724,7 +729,14 @@ void LocalMapping::CreateNewMapPoints()
             mpAtlas->AddMapPoint(pMP);
             mlpRecentAddedMapPoints.push_back(pMP);
         }
-    }    
+    }
+    
+    // Update lastmatch for adaptive threshold (following Rover-SLAM implementation)
+    if(vpNeighKFs.size() > 0)
+    {
+        float matchmean = matchsum / vpNeighKFs.size();
+        mpTracker->UpdateLastMatchNum(matchmean);
+    }
 }
 
 void LocalMapping::SearchInNeighbors()
