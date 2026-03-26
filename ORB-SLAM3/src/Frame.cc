@@ -105,6 +105,8 @@ Frame::Frame(const Frame &frame)
     imgLeftRGB = frame.imgLeftRGB;
     imgAuxiliary = frame.imgAuxiliary;
     undistortedRGB = frame.undistortedRGB;
+    imgLeft = frame.imgLeft;
+    imgRight = frame.imgRight;
 
 #ifdef REGISTER_TIMES
     mTimeStereoMatch = frame.mTimeStereoMatch;

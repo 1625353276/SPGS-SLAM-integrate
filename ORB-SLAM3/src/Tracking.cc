@@ -2059,11 +2059,6 @@ void Tracking::Track()
         // System is initialized. Track Frame.
         bool bOK;
 
-        // Debug output for STEREO mode
-        if(mSensor==System::STEREO) {
-            std::cout << "[TRACK DEBUG] bOK initialized to undefined, mState=" << mState << " mbOnlyTracking=" << mbOnlyTracking << std::endl;
-        }
-
 #ifdef REGISTER_TIMES
         std::chrono::steady_clock::time_point time_StartPosePred = std::chrono::steady_clock::now();
 #endif
@@ -2085,24 +2080,13 @@ void Tracking::Track()
                 {
                     Verbose::PrintMess("TRACK: Track with respect to the reference KF ", Verbose::VERBOSITY_DEBUG);
                     bOK = TrackReferenceKeyFrame();
-                    if(mSensor==System::STEREO) {
-                        std::cout << "[TRACK DEBUG] After TrackReferenceKeyFrame: bOK=" << bOK << std::endl;
-                    }
                 }
                 else
                 {
                     Verbose::PrintMess("TRACK: Track with motion model", Verbose::VERBOSITY_DEBUG);
                     bOK = TrackWithMotionModel();
-                    if(mSensor==System::STEREO) {
-                        std::cout << "[TRACK DEBUG] After TrackWithMotionModel: bOK=" << bOK << std::endl;
-                    }
                     if(!bOK)
-                    {
                         bOK = TrackReferenceKeyFrame();
-                        if(mSensor==System::STEREO) {
-                            std::cout << "[TRACK DEBUG] After fallback TrackReferenceKeyFrame: bOK=" << bOK << std::endl;
-                        }
-                    }
                 }
 
 
@@ -2905,25 +2889,12 @@ bool Tracking::TrackReferenceKeyFrame()
     // Compute Bag of Words vector using SuperPoint vocabulary
     mCurrentFrame.ComputeBoW3();
 
-    // Debug output
-    if(mSensor==System::STEREO) {
-        std::cout << "[TrackRefKF] mpReferenceKF=" << mpReferenceKF << " N=" << mCurrentFrame.N << std::endl;
-        if(mpReferenceKF) {
-            std::cout << "[TrackRefKF] mpReferenceKF N=" << mpReferenceKF->N << " NLeft=" << mpReferenceKF->NLeft << std::endl;
-        }
-    }
-
     //SuperPoint特征提取与跟踪,并通过PNP求解初始位姿
     // We perform first an SuperPoint matching with the reference keyframe
     // If enough matches are found we setup a PnP solver
-    SPmatcher matcher(0.7);
     vector<MapPoint*> vpMapPointMatches;
 
-    int nmatches = matcher.SearchByBoWSP(mpReferenceKF,mCurrentFrame,vpMapPointMatches);
-
-    if(mSensor==System::STEREO) {
-        std::cout << "[TrackRefKF] nmatches=" << nmatches << " (need >=15)" << std::endl;
-    }
+    int nmatches = mspmatcher.SearchByBoWSP(mpReferenceKF,mCurrentFrame,vpMapPointMatches);
 
     if(nmatches<15)
     {
@@ -2971,12 +2942,7 @@ bool Tracking::TrackReferenceKeyFrame()
     if (mSensor == System::IMU_MONOCULAR || mSensor == System::IMU_STEREO || mSensor == System::IMU_RGBD)
         return true;
     else
-    {
-        if(mSensor==System::STEREO) {
-            std::cout << "[TrackRefKF] nmatchesMap=" << nmatchesMap << " (need >=10), returning " << (nmatchesMap>=10) << std::endl;
-        }
         return nmatchesMap>=10;
-    }
 }
 
 void Tracking::UpdateLastFrame()
@@ -3462,9 +3428,6 @@ void Tracking::CreateNewKeyFrame()
         return;
 
     KeyFrame* pKF = new KeyFrame(mCurrentFrame,mpAtlas->GetCurrentMap(),mpKeyFrameDB);
-
-    // Log keyframe features count
-    std::cout << "[KF Features] KF ID: " << pKF->mnId << " Features: " << pKF->N << std::endl;
 
     if(mpAtlas->isImuInitialized()) //  || mpLocalMapper->IsInitializing())
         pKF->bImu = true;
