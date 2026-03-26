@@ -451,6 +451,7 @@ Frame::Frame(const cv::Mat &imGray, const cv::Mat &imDepth, const cv::Mat &imRGB
     this->imgLeftRGB = imRGB.clone();
     this->imgAuxiliary = imDepth.clone();//存储深度图
     this->undistortedRGB = undistorted_img.clone();
+    this->imgLeft = imGray.clone();
 
     // Scale Level Info
     mnScaleLevels = mpExtractorLeft->GetLevels();
@@ -645,6 +646,7 @@ Frame::Frame(const cv::Mat &imGray, const cv::Mat &imRGB, const double &timeStam
     // Save RGB image for Gaussian Mapping
     this->imgLeftRGB = imRGB.clone();
     this->undistortedRGB = undistorted_img.clone();
+    this->imgLeft = imGray.clone();
 
     // Scale Level Info
     mnScaleLevels = mpExtractorLeft->GetLevels();
