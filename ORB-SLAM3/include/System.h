@@ -189,6 +189,7 @@ public:
     float GetImageScale();
 
     eSensor getSensorType() { return mSensor; }
+    Tracking* GetTracker() { return mpTracker; }
 
     cv::Mat preprocessImage(const cv::Mat &src);
 
@@ -220,8 +221,8 @@ private:
     // Input sensor
     eSensor mSensor;
 
-    // SuperPoint vocabulary used for place recognition and feature matching.
-    SPVocabulary* mpVocabulary;
+    // ORB vocabulary used for place recognition and feature matching.
+    ORBVocabulary* mpVocabulary;
 
     // KeyFrame database for place recognition (relocalization and loop detection).
     KeyFrameDatabase* mpKeyFrameDatabase;
