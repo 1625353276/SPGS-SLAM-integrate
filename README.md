@@ -129,15 +129,6 @@ Usage is identical to SEGS-SLAM. All example binaries are in `bin/`.
     no_viewer
 ```
 
-## Differences from SEGS-SLAM
-
-| Component | SEGS-SLAM | SPGS-SLAM |
-|---|---|---|
-| Feature extractor | ORB | SuperPoint (ONNX) |
-| Feature matcher | ORB matcher | LightGlue (ONNX) |
-| Loop closure vocabulary | ORBvoc | SPvoc (SuperPoint-based) |
-| Gaussian backend | Scaffold-GS + AfME | Scaffold-GS + AfME (identical) |
-
 ## Acknowledgements
 
 - [SEGS-SLAM](https://github.com/leaner-forever/SEGS-SLAM)
