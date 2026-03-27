@@ -18,7 +18,7 @@ Model.update_init_factor: 16
 Model.update_hierachy_factor: 4
 
 Model.use_feat_bank: 0 #0 #False
-Model.appearance_dim: 32 #32
+Model.appearance_dim: 32  #32
 Model.lowpoly: 0  # 0:false, 1 or other integer:true
 Model.ds: 1
 Model.ratio: 1 # sampling the input point cloud

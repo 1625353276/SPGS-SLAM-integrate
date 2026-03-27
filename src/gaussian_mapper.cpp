@@ -164,7 +164,7 @@ GaussianMapper::GaussianMapper(
             if (this->sensor_type_ == MONOCULAR || this->sensor_type_ == RGBD)
                 undistort_params.dist_coeff_.copyTo(camera.dist_coeff_);
 
-            camera.initUndistortRectifyMapAndMask(K, SLAM_im_size, K_new, true);
+            camera.initUndistortRectifyMapAndMask(K, SLAM_im_size, K_new, do_gaus_pyramid_training_);
 
             undistort_mask_[camera.camera_id_] =
                 tensor_utils::cvMat2TorchTensor_Float32(
