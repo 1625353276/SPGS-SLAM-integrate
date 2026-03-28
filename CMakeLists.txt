@@ -359,18 +359,6 @@ target_link_libraries(euroc_stereo
     gaussian_mapper
     ORB_SLAM3)
 
-# Test System Initialization
-add_executable(test_system_init test_system_init.cpp)
-target_link_libraries(test_system_init
-    ORB_SLAM3)
-
-# Test GaussianMapper Initialization
-add_executable(test_gaussian_mapper_init test_gaussian_mapper_init.cpp)
-target_link_libraries(test_gaussian_mapper_init
-    gaussian_mapper
-    ORB_SLAM3
-    "${TORCH_LIBRARIES}")
-
 # Scannet Mono //效果很差
 add_executable(scannet_mono examples/scannet_mono.cpp)
 target_link_libraries(scannet_mono
