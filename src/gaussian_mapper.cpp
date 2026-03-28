@@ -1470,27 +1470,70 @@ GaussianMapper::useOneRandomSlidingWindowKeyframe()
     int random_cam_idx;
 
     if (kfid_shuffled_) {
+        // If the shuffle index array size no longer matches the keyframe map
+        // (keyframes were added or removed since last shuffle), regenerate.
+        if (kfid_shuffle_.size() != scene_->keyframes().size()) {
+            generateKfidRandomShuffle();
+            kfid_shuffle_idx_ = 0;
+        }
+
+        if (kfid_shuffle_.empty() || scene_->keyframes().empty())
+            return nullptr;
+
         int start_shuffle_idx = kfid_shuffle_idx_;
+        int loop_guard = 0;
+        const int max_iterations =
+            static_cast<int>(kfid_shuffle_.size()) * 2 + 1;
+
         do {
             ++kfid_shuffle_idx_;
-            if (kfid_shuffle_idx_ >= kfid_shuffle_.size())
+            if (kfid_shuffle_idx_ >= static_cast<int>(kfid_shuffle_.size()))
                 kfid_shuffle_idx_ = 0;
+
             if (kfid_shuffle_idx_ == start_shuffle_idx)
                 for (auto& kfit : scene_->keyframes())
                     increaseKeyframeTimesOfUse(kfit.second, 1);
+
             random_cam_idx = kfid_shuffle_[kfid_shuffle_idx_];
+
+            // Guard: index must be within current map bounds
+            int current_kf_size =
+                static_cast<int>(scene_->keyframes().size());
+            if (current_kf_size == 0)
+                return nullptr;
+            if (random_cam_idx >= current_kf_size) {
+                // Shuffle is stale; regenerate and restart
+                generateKfidRandomShuffle();
+                kfid_shuffle_idx_ = 0;
+                start_shuffle_idx = 0;
+                loop_guard = 0;
+                continue;
+            }
+
             auto random_cam_it = scene_->keyframes().begin();
             for (int cam_idx = 0; cam_idx < random_cam_idx; ++cam_idx)
                 ++random_cam_it;
-            viewpoint_cam = (*random_cam_it).second;
-        } while (viewpoint_cam->remaining_times_of_use_ <= 0);
+
+            // Guard: iterator must be valid
+            if (random_cam_it == scene_->keyframes().end())
+                continue;
+
+            viewpoint_cam = random_cam_it->second;
+            ++loop_guard;
+        } while ((viewpoint_cam == nullptr ||
+                  viewpoint_cam->remaining_times_of_use_ <= 0) &&
+                 loop_guard < max_iterations);
     }
+
+    if (viewpoint_cam == nullptr)
+        return nullptr;
+
     auto viewpoint_fid = viewpoint_cam->fid_;
     if (kfs_used_times_.find(viewpoint_fid) == kfs_used_times_.end())
         kfs_used_times_[viewpoint_fid] = 1;
     else
         ++kfs_used_times_[viewpoint_fid];
-    
+
     --(viewpoint_cam->remaining_times_of_use_);
     return viewpoint_cam;
 }
