@@ -389,6 +389,34 @@ target_link_libraries(scannet_rgbd
 #     gaussian_mapper
 #     ORB_SLAM3)
 
+##################################################################################
+##  Build the AR Demo (NEW: feature/ar-advanced branch)
+##################################################################################
+
+# AR Viewer library
+add_library(ar_viewer_lib SHARED
+    include/ar_viewer.h
+    src/ar_viewer.cpp)
+target_link_libraries(ar_viewer_lib
+    ORB_SLAM3
+    gaussian_mapper
+    ${OpenCV_LIBRARIES}
+    "${TORCH_LIBRARIES}"
+    Eigen3::Eigen
+    glm::glm
+    glfw
+    OpenGL::GL)
+
+# TUM RGBD AR Demo
+add_executable(ar_demo_tum examples/ar_demo_tum.cpp)
+target_link_libraries(ar_demo_tum
+    ar_viewer_lib
+    gaussian_mapper
+    gaussian_viewer
+    ORB_SLAM3
+    ${OpenCV_LIBRARIES}
+    "${TORCH_LIBRARIES}")
+
 # ##################################################################################
 # ##  Build the mapping examples to ${PROJECT_SOURCE_DIR}/bin
 # ##################################################################################
