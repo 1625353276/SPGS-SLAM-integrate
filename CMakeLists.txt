@@ -54,6 +54,7 @@ find_package(OpenSSL REQUIRED)
 find_package(OpenGL REQUIRED)
 find_package(glm REQUIRED)
 find_package(glfw3 REQUIRED)
+find_package(GLEW REQUIRED)
 
 # find_package(realsense2)
 
@@ -396,7 +397,14 @@ target_link_libraries(scannet_rgbd
 # AR Viewer library
 add_library(ar_viewer_lib SHARED
     include/ar_viewer.h
-    src/ar_viewer.cpp)
+    src/ar_viewer.cpp
+    viewer/imgui/imgui.cpp
+    viewer/imgui/imgui_demo.cpp
+    viewer/imgui/imgui_draw.cpp
+    viewer/imgui/imgui_impl_glfw.cpp
+    viewer/imgui/imgui_impl_opengl3.cpp
+    viewer/imgui/imgui_tables.cpp
+    viewer/imgui/imgui_widgets.cpp)
 target_link_libraries(ar_viewer_lib
     ORB_SLAM3
     gaussian_mapper
@@ -405,14 +413,21 @@ target_link_libraries(ar_viewer_lib
     Eigen3::Eigen
     glm::glm
     glfw
-    OpenGL::GL)
+    OpenGL::GL
+    GLEW::GLEW)
 
-# TUM RGBD AR Demo
+# TUM Monocular AR Demo (no depth needed)
 add_executable(ar_demo_tum examples/ar_demo_tum.cpp)
 target_link_libraries(ar_demo_tum
     ar_viewer_lib
-    gaussian_mapper
-    gaussian_viewer
+    ORB_SLAM3
+    ${OpenCV_LIBRARIES}
+    "${TORCH_LIBRARIES}")
+
+# Live webcam AR Demo (Monocular)
+add_executable(ar_demo_live examples/ar_demo_live.cpp)
+target_link_libraries(ar_demo_live
+    ar_viewer_lib
     ORB_SLAM3
     ${OpenCV_LIBRARIES}
     "${TORCH_LIBRARIES}")

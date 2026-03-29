@@ -1,0 +1,190 @@
+/**
+ * AR Demo — Live Webcam (Monocular)
+ *
+ * Usage:
+ *   ./ar_demo_live vocab.bin settings.yaml [camera_id]
+ *
+ *   vocab     — ORB vocabulary (ORBvoc.bin)
+ *   settings  — monocular camera yaml (e.g. cfg/ORB_SLAM3/Monocular/RealCamera/webcam_640x480.yaml)
+ *   camera_id — OpenCV camera index (default: 0)
+ *
+ * Rendering pipeline (same as AR_course Ubuntu):
+ *   1. Background = raw camera frame
+ *   2. Foreground = SpongeBob .obj rendered with SLAM pose
+ */
+
+#include <iostream>
+#include <string>
+#include <thread>
+#include <chrono>
+#include <memory>
+#include <cstdlib>
+
+#include <opencv2/opencv.hpp>
+
+#include "include/ar_viewer.h"
+#include "ORB-SLAM3/include/System.h"
+
+using namespace std;
+using namespace SPGS;
+
+int main(int argc, char** argv)
+{
+    if (argc < 3) {
+        cout << "Usage: " << argv[0]
+             << " vocab settings [camera_id]" << endl;
+        cout << "Example:" << endl;
+        cout << "  " << argv[0]
+             << " ORB-SLAM3/Vocabulary/ORBvoc.bin"
+                " cfg/ORB_SLAM3/Monocular/RealCamera/webcam_640x480.yaml"
+                " 0" << endl;
+        return 1;
+    }
+
+    const string vocab    = argv[1];
+    const string settings = argv[2];
+    const int    cam_id   = (argc > 3) ? atoi(argv[3]) : 0;
+
+    // ----------------------------------------------------------------
+    // Read camera intrinsics from settings file
+    // ----------------------------------------------------------------
+    cv::FileStorage fs(settings, cv::FileStorage::READ);
+    if (!fs.isOpened()) {
+        cerr << "Cannot open settings: " << settings << endl;
+        return 1;
+    }
+
+    // ORB-SLAM3 newer yaml uses Camera1.fx, older uses Camera.fx
+    int   W  = (int)fs["Camera.width"];
+    int   H  = (int)fs["Camera.height"];
+
+    float fx = (float)fs["Camera1.fx"];
+    float fy = (float)fs["Camera1.fy"];
+    float cx = (float)fs["Camera1.cx"];
+    float cy = (float)fs["Camera1.cy"];
+
+    // Fallback to old-style keys
+    if (fx == 0.0f) fx = (float)fs["Camera.fx"];
+    if (fy == 0.0f) fy = (float)fs["Camera.fy"];
+    if (cx == 0.0f) cx = (float)fs["Camera.cx"];
+    if (cy == 0.0f) cy = (float)fs["Camera.cy"];
+
+    fs.release();
+
+    if (W == 0 || H == 0 || fx == 0.0f) {
+        cerr << "Failed to read camera intrinsics from: " << settings << endl;
+        return 1;
+    }
+
+    cout << "Camera: " << W << "x" << H
+         << "  fx=" << fx << " fy=" << fy
+         << " cx=" << cx << " cy=" << cy << endl;
+
+    // ----------------------------------------------------------------
+    // Open webcam
+    // ----------------------------------------------------------------
+    cv::VideoCapture cap(cam_id);
+    if (!cap.isOpened()) {
+        cerr << "Cannot open camera id=" << cam_id << endl;
+        return 1;
+    }
+    cap.set(cv::CAP_PROP_FRAME_WIDTH,  W);
+    cap.set(cv::CAP_PROP_FRAME_HEIGHT, H);
+    cap.set(cv::CAP_PROP_FPS, 30);
+
+    cout << "Camera opened: "
+         << cap.get(cv::CAP_PROP_FRAME_WIDTH)  << "x"
+         << cap.get(cv::CAP_PROP_FRAME_HEIGHT) << endl;
+
+    // ----------------------------------------------------------------
+    // Init SLAM (Monocular, no built-in viewer)
+    // ----------------------------------------------------------------
+    cout << "Initializing SLAM..." << endl;
+    auto pSLAM = make_shared<ORB_SLAM3::System>(
+        vocab, settings, ORB_SLAM3::System::MONOCULAR, /*viewer=*/false);
+
+    // ----------------------------------------------------------------
+    // Init AR Viewer
+    // ----------------------------------------------------------------
+    cout << "Initializing AR Viewer..." << endl;
+    ARViewer viewer(pSLAM, W, H, fx, fy, cx, cy);
+
+    // Place SpongeBob 1 m in front of camera origin
+    Sophus::SE3f obj_pose(
+        Eigen::Quaternionf::Identity(),
+        Eigen::Vector3f(0.0f, 0.0f, 1.0f));
+
+    int obj_id = viewer.addObject(
+        "SpongeBob",
+        "SpongeBob/spongebob.obj",
+        "SpongeBob/spongebob.png",
+        obj_pose,
+        glm::vec3(0.3f, 0.3f, 0.3f));
+
+    if (obj_id < 0) {
+        cerr << "Failed to load SpongeBob model. "
+                "Make sure SpongeBob/ folder is in the working directory." << endl;
+        return 1;
+    }
+
+    cout << "SpongeBob loaded (id=" << obj_id << ")" << endl;
+    cout << "Controls:  ESC = quit" << endl;
+    cout << "Note: Monocular SLAM needs a few seconds of movement to initialise." << endl;
+
+    // ----------------------------------------------------------------
+    // Start viewer in background thread, wait for GL to be ready
+    // ----------------------------------------------------------------
+    viewer.runAsync();
+    viewer.waitUntilReady();  // block until GL context + shaders ready
+
+    // ----------------------------------------------------------------
+    // Main loop: grab frame → SLAM → update viewer
+    // ----------------------------------------------------------------
+    cv::Mat frame;
+    int frame_no = 0;
+
+    while (viewer.isRunning()) {
+        cap >> frame;
+        if (frame.empty()) {
+            cerr << "Empty frame from camera" << endl;
+            break;
+        }
+
+        // Resize if camera didn't honour the request
+        if (frame.cols != W || frame.rows != H)
+            cv::resize(frame, frame, cv::Size(W, H));
+
+        // Timestamp in seconds
+        double timestamp = (double)cv::getTickCount() / cv::getTickFrequency();
+
+        // Convert BGR→RGB for SLAM (settings say Camera.RGB: 1)
+        cv::Mat rgb;
+        cv::cvtColor(frame, rgb, cv::COLOR_BGR2RGB);
+
+        // Track
+        Sophus::SE3f T_wc = pSLAM->TrackMonocular(rgb, timestamp);
+        int state = pSLAM->GetTrackingState();
+
+        // Update viewer — pass original BGR for natural-colour background
+        viewer.setCurrentImage(frame);
+        viewer.setCurrentPose(T_wc);
+
+        // Show model only when tracking is good (state == 2)
+        viewer.setObjectVisible(obj_id, state == 2);
+
+        if (++frame_no % 30 == 0) {
+            cout << "\rFrame " << frame_no
+                 << "  tracking state=" << state
+                 << "    " << flush;
+        }
+    }
+
+    cout << "\nStopping..." << endl;
+
+    viewer.stop();
+    pSLAM->Shutdown();
+    cap.release();
+
+    // Use _Exit to avoid LLVM/PyTorch atexit crash (known issue)
+    std::_Exit(0);
+}
