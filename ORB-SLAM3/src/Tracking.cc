@@ -2466,10 +2466,19 @@ void Tracking::Track()
         else
         {
             // This can happen if tracking is lost
-            mlRelativeFramePoses.push_back(mlRelativeFramePoses.back());
-            mlpReferences.push_back(mlpReferences.back());
-            mlFrameTimes.push_back(mlFrameTimes.back());
-            mlbLost.push_back(mState==LOST);
+            // Check if lists are not empty before calling back() to prevent crash
+            if(!mlRelativeFramePoses.empty())
+            {
+                mlRelativeFramePoses.push_back(mlRelativeFramePoses.back());
+                mlpReferences.push_back(mlpReferences.back());
+                mlFrameTimes.push_back(mlFrameTimes.back());
+                mlbLost.push_back(mState==LOST);
+            }
+            else
+            {
+                // Lists are empty, skip this frame to avoid crash
+                Verbose::PrintMess("Tracking lost but no previous pose to reuse, skipping frame...", Verbose::VERBOSITY_NORMAL);
+            }
         }
 
     }
@@ -2949,6 +2958,14 @@ void Tracking::UpdateLastFrame()
 {
     // Update pose according to reference keyframe
     KeyFrame* pRef = mLastFrame.mpReferenceKF;
+    
+    // Check if mlRelativeFramePoses is not empty to prevent crash
+    if(mlRelativeFramePoses.empty())
+    {
+        Verbose::PrintMess("UpdateLastFrame: mlRelativeFramePoses is empty, skipping...", Verbose::VERBOSITY_NORMAL);
+        return;
+    }
+    
     Sophus::SE3f Tlr = mlRelativeFramePoses.back();
     mLastFrame.SetPose(Tlr * pRef->GetPose());
 

@@ -33,6 +33,7 @@ KeyFrameDatabase::KeyFrameDatabase (const ORBVocabulary &voc):
     mpVoc(&voc)
 {
     mvInvertedFile.resize(voc.size());
+    mvInvertedFile_sp.resize(voc.size());
 }
 
 
