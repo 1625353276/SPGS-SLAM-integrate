@@ -44,11 +44,21 @@ test_output/
 ORB-SLAM3/Vocabulary/*.bin
 ORB-SLAM3/Vocabulary/*.yml
 ORB-SLAM3/Vocabulary/*.gz
+Vocabulary/
 voc_*
 
 # ONNX model files
 onnxmodel/
 *.onnx
+
+# 3D model assets (large binary files, not part of source)
+SpongeBob/
+
+# ImGui runtime config
+imgui.ini
+
+# CUDA installer package
+*.deb
 
 # Test programs
 test_*.cpp
