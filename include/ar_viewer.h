@@ -187,6 +187,9 @@ public:
     void setShowMapPoints(bool show) { show_map_points_ = show; }
     bool showMapPoints() const { return show_map_points_; }
 
+    // Plane detection status message (empty = no error)
+    std::string plane_status_msg_;
+
 private:
     bool show_map_points_ = false;
 
@@ -207,6 +210,16 @@ private:
 
     // View matrix from SLAM pose
     glm::mat4 buildViewMatrix() const;
+
+    // Fit a plane from map points near the clicked screen position using RANSAC.
+    // Outputs the plane normal (pointing toward camera) and a point on the plane
+    // (centroid of inliers), both in world space.
+    // Returns false if not enough points or fitting quality is poor.
+    bool fitPlaneFromMapPoints(double px, double py,
+                               float search_radius_px,
+                               Eigen::Vector3f& plane_normal,
+                               Eigen::Vector3f& plane_point,
+                               int min_inliers = 6);
 
     // Keyboard callbacks
     static void keyCallback(GLFWwindow* w, int key, int sc, int action, int mods);

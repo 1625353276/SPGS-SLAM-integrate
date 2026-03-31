@@ -13,6 +13,8 @@
 #include <thread>
 #include <cstdio>
 #include <cstring>
+#include <random>
+#include <numeric>
 
 namespace SPGS {
 
@@ -441,8 +443,14 @@ void ARViewer::run()
             std::cout << "[ARViewer] Map points: " << (show_map_points_ ? "ON" : "OFF") << std::endl;
         }
         
-        ImGui::Text("Click to place object");
+        ImGui::Text("Click to place object on detected plane");
         ImGui::Text("ESC to quit");
+
+        if (!plane_status_msg_.empty()) {
+            ImGui::Separator();
+            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", plane_status_msg_.c_str());
+        }
+
         ImGui::End();
 
         ImGui::Render();
@@ -808,14 +816,12 @@ void ARViewer::mouseCallback(GLFWwindow* w, int button, int action, int)
         std::lock_guard<std::mutex> lk(v->obj_mutex_);
         if (!v->objects_.empty()) {
             int obj_id = 0;  // first object
-            // Try map point first, fallback to fixed depth
             bool placed = v->moveObjectToNearestMapPoint(obj_id, px, py, 50.0f);
-            if (!placed) {
-                v->moveObjectToScreenPos(obj_id, px, py, 0.5f);
-                std::cout << "[ARViewer] No map point found, using fixed depth 0.5m" << std::endl;
+            if (placed) {
+                // Make visible only on successful plane placement
+                v->objects_[obj_id].visible = true;
             }
-            // Make visible after placement
-            v->objects_[obj_id].visible = true;
+            // On failure: keep current visibility, plane_status_msg_ has the reason
         }
     }
 }
@@ -867,19 +873,20 @@ void ARViewer::moveObjectToScreenPos(int obj_id, double px, double py, float dep
     objects_[obj_id].pose = new_pose;
 }
 
-bool ARViewer::moveObjectToNearestMapPoint(int obj_id, double px, double py, float max_pixel_dist)
+// ============================================================================
+// Plane detection via RANSAC on nearby map points
+// ============================================================================
+
+bool ARViewer::fitPlaneFromMapPoints(
+    double px, double py,
+    float search_radius_px,
+    Eigen::Vector3f& plane_normal,
+    Eigen::Vector3f& plane_point,
+    int min_inliers)
 {
-    if (obj_id < 0 || obj_id >= (int)objects_.size()) return false;
     if (!pSLAM_) return false;
 
-    // Get tracked map points from SLAM
-    std::vector<ORB_SLAM3::MapPoint*> map_points = pSLAM_->GetTrackedMapPoints();
-    if (map_points.empty()) {
-        std::cout << "[ARViewer] No map points available" << std::endl;
-        return false;
-    }
-
-    // Get current camera pose (T_cw)
+    // Get current T_cw
     Sophus::SE3f T_cw;
     {
         std::lock_guard<std::mutex> lk(const_cast<std::mutex&>(pose_mutex_));
@@ -888,74 +895,193 @@ bool ARViewer::moveObjectToNearestMapPoint(int obj_id, double px, double py, flo
     Eigen::Matrix3f R_cw = T_cw.rotationMatrix();
     Eigen::Vector3f t_cw = T_cw.translation();
 
-    // Find nearest map point to click position
-    float min_dist = max_pixel_dist;
-    Eigen::Vector3f best_p_world;
-    bool found = false;
+    // Step 1: collect candidate map points within search radius
+    std::vector<ORB_SLAM3::MapPoint*> map_points = pSLAM_->GetTrackedMapPoints();
+    std::vector<Eigen::Vector3f> candidates;
+    candidates.reserve(map_points.size());
 
     for (auto* mp : map_points) {
         if (!mp || mp->isBad()) continue;
-
-        // Get world position
         Eigen::Vector3f p_world = mp->GetWorldPos();
-
-        // Transform to camera coordinates
-        Eigen::Vector3f p_cam = R_cw * p_world + t_cw;
-
-        // Check if in front of camera
+        Eigen::Vector3f p_cam  = R_cw * p_world + t_cw;
         if (p_cam.z() <= 0.1f) continue;
 
-        // Project to image plane
         float u = fx_ * p_cam.x() / p_cam.z() + cx_;
         float v = fy_ * p_cam.y() / p_cam.z() + cy_;
-
-        // Check if in image bounds
-        if (u < 0 || u >= img_w_ || v < 0 || v >= img_h_) continue;
-
-        // Distance to click
-        float dist = std::sqrt((u - (float)px) * (u - (float)px) +
-                               (v - (float)py) * (v - (float)py));
-
-        if (dist < min_dist) {
-            min_dist = dist;
-            best_p_world = p_world;
-            found = true;
-        }
+        float du = u - (float)px;
+        float dv = v - (float)py;
+        if (std::sqrt(du * du + dv * dv) <= search_radius_px)
+            candidates.push_back(p_world);
     }
 
-    if (!found) {
-        std::cout << "[ARViewer] No map point within " << max_pixel_dist << " pixels" << std::endl;
+    if ((int)candidates.size() < min_inliers) {
+        std::cout << "[PlaneDetect] Not enough candidates: " << candidates.size()
+                  << " (need " << min_inliers << ")" << std::endl;
         return false;
     }
 
-    // Compute rotation to face the camera
-    // Camera position in world space
-    Eigen::Vector3f cam_pos = T_cw.inverse().translation();
-    
-    // Direction from object to camera
-    Eigen::Vector3f to_cam = (cam_pos - best_p_world).normalized();
-    
-    // Build rotation: model stands upright (Y up) and faces the camera
-    // In OBJ convention: Y is up, -Z is forward
-    // We want -Z to point toward camera, Y to stay up as much as possible
-    
-    // Project to_cam onto XZ plane to get forward direction (ignore Y component)
-    Eigen::Vector3f forward_xz(to_cam.x(), 0.0f, to_cam.z());
-    forward_xz.normalize();
-    
-    // Rotation around Y axis: angle between -Z (model forward) and forward_xz
-    float yaw = std::atan2(forward_xz.x(), -forward_xz.z());
-    
-    // Combined rotation: first rotate around X by -90° to stand up, then around Y by yaw
-    Eigen::AngleAxisf rot_x(-(float)M_PI / 2.0f, Eigen::Vector3f::UnitX());
-    Eigen::AngleAxisf rot_y(yaw, Eigen::Vector3f::UnitY());
-    Eigen::Quaternionf q = rot_y * rot_x;
+    // Step 2: RANSAC plane fitting
+    const int   N_ITER        = 200;
+    const float INLIER_THRESH = 0.02f;   // 2 cm
 
-    // Update object pose
-    Sophus::SE3f new_pose(q, best_p_world);
+    std::mt19937 rng(42);
+    std::uniform_int_distribution<int> dist(0, (int)candidates.size() - 1);
+
+    int best_count = 0;
+    Eigen::Vector3f best_n(0, 1, 0);
+    float best_d = 0.0f;
+
+    for (int iter = 0; iter < N_ITER; ++iter) {
+        // Sample 3 distinct points
+        int i0 = dist(rng), i1, i2;
+        do { i1 = dist(rng); } while (i1 == i0);
+        do { i2 = dist(rng); } while (i2 == i0 || i2 == i1);
+
+        const Eigen::Vector3f& p0 = candidates[i0];
+        const Eigen::Vector3f& p1 = candidates[i1];
+        const Eigen::Vector3f& p2 = candidates[i2];
+
+        Eigen::Vector3f n = (p1 - p0).cross(p2 - p0);
+        if (n.norm() < 1e-6f) continue;
+        n.normalize();
+        float d = n.dot(p0);
+
+        int count = 0;
+        for (const auto& p : candidates)
+            if (std::abs(n.dot(p) - d) < INLIER_THRESH) ++count;
+
+        if (count > best_count) {
+            best_count = count;
+            best_n     = n;
+            best_d     = d;
+        }
+    }
+
+    if (best_count < min_inliers) {
+        std::cout << "[PlaneDetect] RANSAC failed: best inlier count=" << best_count << std::endl;
+        return false;
+    }
+
+    // Step 3: refine normal via SVD on inliers
+    std::vector<Eigen::Vector3f> inliers;
+    inliers.reserve(best_count);
+    for (const auto& p : candidates)
+        if (std::abs(best_n.dot(p) - best_d) < INLIER_THRESH)
+            inliers.push_back(p);
+
+    // Compute centroid
+    Eigen::Vector3f centroid = Eigen::Vector3f::Zero();
+    for (const auto& p : inliers) centroid += p;
+    centroid /= (float)inliers.size();
+
+    // Build 3x3 covariance matrix (A^T * A)
+    Eigen::Matrix3f cov = Eigen::Matrix3f::Zero();
+    for (const auto& p : inliers) {
+        Eigen::Vector3f q = p - centroid;
+        cov += q * q.transpose();
+    }
+
+    // Smallest eigenvector of cov = best-fit plane normal
+    Eigen::SelfAdjointEigenSolver<Eigen::Matrix3f> solver(cov);
+    Eigen::Vector3f n_refined = solver.eigenvectors().col(0);  // smallest eigenvalue
+
+    // Step 4: ensure normal points toward camera
+    Eigen::Vector3f cam_pos = T_cw.inverse().translation();
+    if (n_refined.dot(cam_pos - centroid) < 0.0f)
+        n_refined = -n_refined;
+
+    // Step 5: reject planes nearly perpendicular to view direction
+    //         (e.g. a vertical wall viewed almost face-on is fine; nearly edge-on is bad)
+    Eigen::Vector3f cam_dir = (centroid - cam_pos).normalized();
+    if (std::abs(n_refined.dot(cam_dir)) < 0.2f) {
+        std::cout << "[PlaneDetect] Plane nearly parallel to viewing ray, skip" << std::endl;
+        return false;
+    }
+
+    plane_normal = n_refined;
+    plane_point  = centroid;
+
+    std::cout << "[PlaneDetect] OK  inliers=" << inliers.size()
+              << "  n=(" << n_refined.transpose() << ")" << std::endl;
+    return true;
+}
+
+bool ARViewer::moveObjectToNearestMapPoint(int obj_id, double px, double py, float /*max_pixel_dist*/)
+{
+    if (obj_id < 0 || obj_id >= (int)objects_.size()) return false;
+    if (!pSLAM_) return false;
+
+    // -----------------------------------------------------------------------
+    // Detect a local plane using progressively larger search radii.
+    // Start small (50 px) to prefer a tight local plane; grow up to 250 px
+    // if not enough map points are found at the smaller radius.
+    // -----------------------------------------------------------------------
+    Eigen::Vector3f plane_normal, place_pt;
+    bool plane_found = false;
+    float used_radius = 0.0f;
+    const float radii[] = { 50.0f, 100.0f, 150.0f, 200.0f, 250.0f };
+    for (float r : radii) {
+        if (fitPlaneFromMapPoints(px, py, r, plane_normal, place_pt)) {
+            plane_found = true;
+            used_radius = r;
+            break;
+        }
+    }
+    if (!plane_found) {
+        plane_status_msg_ = "未检测到平面，请在特征点可见处点击";
+        std::cout << "[ARViewer] Plane detection failed at all radii" << std::endl;
+        return false;
+    }
+    plane_status_msg_.clear();
+    std::cout << "[ARViewer] Plane found at radius=" << used_radius << " px" << std::endl;
+
+    // -----------------------------------------------------------------------
+    // Build a rotation matrix that stands the object on the detected plane
+    // and faces it toward the camera. (Gram-Schmidt orthogonalization)
+    //
+    // Convention (SpongeBob OBJ):
+    //   model  Y axis = "up"    → world plane_normal
+    //   model -Z axis = "front" → toward camera projected onto plane
+    // -----------------------------------------------------------------------
+    Sophus::SE3f T_cw;
+    {
+        std::lock_guard<std::mutex> lk(const_cast<std::mutex&>(pose_mutex_));
+        T_cw = current_pose_;
+    }
+    Eigen::Vector3f cam_pos = T_cw.inverse().translation();
+
+    Eigen::Vector3f up = plane_normal;  // new "up" axis in world space
+
+    // Direction from object to camera, projected onto the plane
+    Eigen::Vector3f to_cam  = (cam_pos - place_pt).normalized();
+    Eigen::Vector3f forward = to_cam - to_cam.dot(up) * up;
+
+    if (forward.norm() < 0.01f) {
+        // to_cam is almost parallel to the normal (camera nearly directly above);
+        // fall back to an arbitrary tangent direction
+        Eigen::Vector3f arbitrary = (std::abs(up.x()) < 0.9f)
+            ? Eigen::Vector3f(1, 0, 0) : Eigen::Vector3f(0, 1, 0);
+        forward = arbitrary - arbitrary.dot(up) * up;
+    }
+    forward.normalize();
+
+    Eigen::Vector3f right = up.cross(forward).normalized();  // right-hand: up × forward
+    forward = right.cross(up).normalized();  // re-orthogonalize
+
+    // SpongeBob OBJ convention: front face points along -Z (model space).
+    // We want the front face toward the camera, so model -Z → world forward (toward cam).
+    // Therefore col(2) = +forward  (model +Z points AWAY from camera).
+    Eigen::Matrix3f R_world;
+    R_world.col(0) =  right;
+    R_world.col(1) =  up;
+    R_world.col(2) =  forward;
+
+    Sophus::SE3f new_pose(Eigen::Quaternionf(R_world), place_pt);
     objects_[obj_id].pose = new_pose;
 
-    std::cout << "[ARViewer] Object placed at map point, distance=" << min_dist << " pixels" << std::endl;
+    std::cout << "[ARViewer] Object placed on plane at ("
+              << place_pt.transpose() << ")  normal=("
+              << plane_normal.transpose() << ")" << std::endl;
     return true;
 }
 
