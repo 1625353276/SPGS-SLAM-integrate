@@ -53,6 +53,7 @@ onnxmodel/
 
 # 3D model assets (large binary files, not part of source)
 SpongeBob/
+models/
 
 # ImGui runtime config
 imgui.ini
