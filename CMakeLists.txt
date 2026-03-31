@@ -420,6 +420,7 @@ target_link_libraries(ar_viewer_lib
 add_executable(ar_demo_tum examples/ar_demo_tum.cpp)
 target_link_libraries(ar_demo_tum
     ar_viewer_lib
+    gaussian_mapper
     ORB_SLAM3
     ${OpenCV_LIBRARIES}
     "${TORCH_LIBRARIES}")

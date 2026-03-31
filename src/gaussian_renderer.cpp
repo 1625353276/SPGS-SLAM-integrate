@@ -128,6 +128,86 @@ GaussianRenderer::render(
     );
 }
 
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor,
+           torch::Tensor, torch::Tensor, torch::Tensor, bool, torch::Tensor>
+GaussianRenderer::renderWithDepth(
+    std::shared_ptr<GaussianKeyframe> viewpoint_camera,
+    int image_height,
+    int image_width,
+    std::shared_ptr<GaussianModel> pc,
+    GaussianPipelineParams &pipe,
+    torch::Tensor &bg_color,
+    torch::Tensor &override_color,
+    torch::Tensor &visible_mask,
+    bool retain_grad,
+    float scaling_modifier,
+    bool use_override_color)
+{
+    bool is_training = pc->get_color_mlp()->is_training();
+
+    auto neural_gaussians = generate_neural_gaussians(
+        viewpoint_camera, image_height, image_width, pc, visible_mask, is_training);
+    auto xyz_     = std::get<0>(neural_gaussians);
+    auto color_   = std::get<1>(neural_gaussians);
+    auto opacity_ = std::get<2>(neural_gaussians);
+    auto scaling_ = std::get<3>(neural_gaussians);
+    auto rot_     = std::get<4>(neural_gaussians);
+
+    torch::Tensor neural_opacity, mask;
+    if (is_training) {
+        neural_opacity = std::get<5>(neural_gaussians);
+        mask           = std::get<6>(neural_gaussians);
+    }
+
+    auto screenspace_points = torch::zeros_like(xyz_,
+        torch::TensorOptions().dtype(pc->get_anchor().dtype()).requires_grad(true).device(torch::kCUDA));
+    if (retain_grad) {
+        try { screenspace_points.retain_grad(); }
+        catch (const std::exception& e) { ; }
+    }
+
+    float tanfovx = std::tan(viewpoint_camera->FoVx_ * 0.5f);
+    float tanfovy = std::tan(viewpoint_camera->FoVy_ * 0.5f);
+
+    GaussianRasterizationSettings raster_settings(
+        image_height, image_width, tanfovx, tanfovy,
+        bg_color, scaling_modifier,
+        viewpoint_camera->world_view_transform_,
+        viewpoint_camera->full_proj_transform_,
+        pc->active_sh_degree_,
+        viewpoint_camera->camera_center_,
+        false);
+
+    GaussianRasterizer rasterizer(raster_settings);
+
+    torch::Tensor shs          = torch::empty({0});
+    torch::Tensor cov3D_precomp = torch::empty({0});
+
+    // Use the WithDepth variant — returns (color, radii, depth)
+    auto rasterizer_result = rasterizer.forwardWithDepth(
+        xyz_, screenspace_points, opacity_,
+        /*has_shs=*/false, /*has_colors_precomp=*/true,
+        /*has_scales=*/true, /*has_rotations=*/true,
+        /*has_cov3D_precomp=*/false,
+        shs, color_, scaling_, rot_, cov3D_precomp);
+
+    auto rendered_image = std::get<0>(rasterizer_result);
+    auto radii          = std::get<1>(rasterizer_result);
+    auto depth          = std::get<2>(rasterizer_result);  // [1, H, W] float32
+
+    return std::make_tuple(
+        rendered_image,
+        screenspace_points,
+        radii > 0,
+        radii,
+        mask,
+        neural_opacity,
+        scaling_,
+        is_training,
+        depth
+    );
+}
+
 torch::Tensor GaussianRenderer::prefilter_voxel(
     std::shared_ptr<GaussianKeyframe> viewpoint_camera,
     int image_height,

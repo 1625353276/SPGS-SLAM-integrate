@@ -48,6 +48,23 @@ public:
         float scaling_modifier = 1.0f,
         bool has_override_color = false);
 
+    // Same as render() but also outputs a depth map tensor [1,H,W] in view space.
+    // Returns: (image, screenspace_pts, visibility, radii, mask, neural_opacity, scaling, is_training, depth)
+    static std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor,
+                      torch::Tensor, torch::Tensor, torch::Tensor, bool, torch::Tensor>
+    renderWithDepth(
+        std::shared_ptr<GaussianKeyframe> viewpoint_camera,
+        int image_height,
+        int image_width,
+        std::shared_ptr<GaussianModel> gaussians,
+        GaussianPipelineParams &pipe,
+        torch::Tensor &bg_color,
+        torch::Tensor &override_color,
+        torch::Tensor &visible_mask,
+        bool retain_grad = false,
+        float scaling_modifier = 1.0f,
+        bool has_override_color = false);
+
     static torch::Tensor prefilter_voxel(
         std::shared_ptr<GaussianKeyframe> viewpoint_camera,
         int image_height,

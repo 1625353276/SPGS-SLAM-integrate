@@ -7,14 +7,18 @@
 
 #include "include/ar_viewer.h"
 #include "ORB-SLAM3/include/System.h"
+#include "include/gaussian_mapper.h"
 
 #include <iostream>
+#include <iomanip>
 #include <chrono>
 #include <thread>
 #include <cstdio>
 #include <cstring>
 #include <random>
 #include <numeric>
+#include <filesystem>
+#include <map>
 
 namespace SPGS {
 
@@ -203,8 +207,24 @@ bool ObjMesh::loadOBJ(const std::string& path)
     return true;
 }
 
+// CPU-side texture data for delayed GPU upload
+typedef struct {
+    std::vector<unsigned char> data;
+    int width = 0;
+    int height = 0;
+    bool loaded = false;
+} TextureData;
+
+static std::map<std::string, TextureData> g_texture_cache;
+
 bool ObjMesh::loadTexture(const std::string& img_path)
 {
+    // Check if already in cache
+    if (g_texture_cache.find(img_path) != g_texture_cache.end()) {
+        std::cout << "[ObjMesh] Texture cached: " << img_path << std::endl;
+        return true;
+    }
+
     // Use OpenCV to load — same idea as AR_course loadframe_opencv
     cv::Mat img = cv::imread(img_path);
     if (img.empty()) {
@@ -215,19 +235,38 @@ bool ObjMesh::loadTexture(const std::string& img_path)
     cv::Mat flipped;
     cv::flip(img, flipped, 0);  // flip vertically (same as AR_course)
 
+    // Store in cache for later GPU upload
+    TextureData tex_data;
+    tex_data.width = flipped.cols;
+    tex_data.height = flipped.rows;
+    tex_data.data.assign(flipped.data, flipped.data + flipped.total() * flipped.elemSize());
+    tex_data.loaded = true;
+    g_texture_cache[img_path] = std::move(tex_data);
+
+    std::cout << "[ObjMesh] Texture loaded (CPU): " << img_path << std::endl;
+    return true;
+}
+
+// Upload texture to GPU (call from GL thread)
+void ObjMesh::uploadTextureGPU(const std::string& img_path)
+{
+    auto it = g_texture_cache.find(img_path);
+    if (it == g_texture_cache.end() || !it->second.loaded) return;
+
+    const TextureData& tex_data = it->second;
+
     glGenTextures(1, &texture);
     glBindTexture(GL_TEXTURE_2D, texture);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB,
-                 flipped.cols, flipped.rows, 0,
-                 GL_BGR, GL_UNSIGNED_BYTE, flipped.data);
+                 tex_data.width, tex_data.height, 0,
+                 GL_BGR, GL_UNSIGNED_BYTE, tex_data.data.data());
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     glGenerateMipmap(GL_TEXTURE_2D);
 
-    std::cout << "[ObjMesh] Texture loaded: " << img_path << std::endl;
-    return true;
+    std::cout << "[ObjMesh] Texture uploaded to GPU: " << img_path << std::endl;
 }
 
 void ObjMesh::uploadToGPU()
@@ -390,7 +429,7 @@ void ARViewer::initBackgroundQuad()
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);  // no mipmap for video frames
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 }
 
 void ARViewer::cleanup()
@@ -404,18 +443,17 @@ void ARViewer::cleanup()
         objects_.clear();
     }
 
-    if (bg_vao_)    { glDeleteVertexArrays(1, &bg_vao_);   bg_vao_    = 0; }
-    if (bg_vbo_)    { glDeleteBuffers(1, &bg_vbo_);         bg_vbo_    = 0; }
-    if (bg_tex_)    { glDeleteTextures(1, &bg_tex_);        bg_tex_    = 0; }
-    if (bg_shader_) { glDeleteProgram(bg_shader_);          bg_shader_ = 0; }
-    if (obj_shader_){ glDeleteProgram(obj_shader_);         obj_shader_= 0; }
-    if (point_shader_) { glDeleteProgram(point_shader_);    point_shader_ = 0; }
-    if (mp_vao_)    { glDeleteVertexArrays(1, &mp_vao_);    mp_vao_    = 0; }
-    if (mp_vbo_)    { glDeleteBuffers(1, &mp_vbo_);         mp_vbo_    = 0; }
+    if (bg_vao_)          { glDeleteVertexArrays(1, &bg_vao_);   bg_vao_    = 0; }
+    if (bg_vbo_)          { glDeleteBuffers(1, &bg_vbo_);         bg_vbo_    = 0; }
+    if (bg_tex_)          { glDeleteTextures(1, &bg_tex_);        bg_tex_    = 0; }
+    if (bg_shader_)       { glDeleteProgram(bg_shader_);          bg_shader_ = 0; }
+    if (obj_shader_)      { glDeleteProgram(obj_shader_);         obj_shader_= 0; }
+    if (point_shader_)    { glDeleteProgram(point_shader_);       point_shader_ = 0; }
+    if (mp_vao_)          { glDeleteVertexArrays(1, &mp_vao_);    mp_vao_    = 0; }
+    if (mp_vbo_)          { glDeleteBuffers(1, &mp_vbo_);         mp_vbo_    = 0; }
 
     if (window_) { glfwDestroyWindow(window_); window_ = nullptr; }
-    // NOTE: glfwTerminate() intentionally NOT called here —
-    // called explicitly after all threads exit to avoid TLS teardown crash.
+    // NOTE: glfwTerminate() intentionally NOT called here
 }
 
 // ---- Run loop ----
@@ -438,11 +476,84 @@ void ARViewer::run()
         // Control panel
         ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_Once);
         ImGui::Begin("AR Controls", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
-        
+
         if (ImGui::Checkbox("Show Map Points", &show_map_points_)) {
             std::cout << "[ARViewer] Map points: " << (show_map_points_ ? "ON" : "OFF") << std::endl;
         }
+        // Note: Occlusion features removed - virtual objects always visible
+
+        // Gaussian Mapper status & training control
+        if (pGausMapper_) {
+            ImGui::Separator();
+
+            int itr = pGausMapper_->getIteration();
+            int max_itr = pGausMapper_->getMaxIterations();
+            float loss = pGausMapper_->getLastLoss();
+            bool paused = pGausMapper_->isTrainingPaused();
+
+            // Progress bar
+            float progress = pGausMapper_->getTrainingProgress();
+            std::string progress_str = std::to_string(int(progress * 100)) + "%";
+            ImGui::Text("Gaussian Training:");
+            ImGui::ProgressBar(progress, ImVec2(-1, 0), progress_str.c_str());
+
+            // Iteration & loss
+            ImGui::Text("Iter: %d / %d   Loss: %.4f", itr, max_itr, loss);
+
+            // Pause/Resume button
+            if (paused) {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.6f, 0.2f, 1.0f));
+                if (ImGui::Button("Resume Training")) {
+                    pGausMapper_->resumeTraining();
+                }
+                ImGui::PopStyleColor();
+                ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "Training PAUSED");
+            } else {
+                if (itr > 0) {  // Only show pause if training started
+                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.6f, 0.4f, 0.2f, 1.0f));
+                    if (ImGui::Button("Pause Training")) {
+                        pGausMapper_->pauseTraining();
+                    }
+                    ImGui::PopStyleColor();
+                }
+            }
+
+            // Gaussian background preview & lighting
+            if (itr > 0) {
+                ImGui::Checkbox("Gaussian Background (preview)", &show_gaussian_bg_);
+                ImGui::Checkbox("Gaussian Lighting (realistic)", &use_gaussian_lighting_);
+                // Note: Gaussian Occlusion removed due to instability
+            } else {
+                ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f),
+                    "Waiting for initialization (~20 kfs)...");
+            }
+        }
         
+        // Model selection
+        if (!available_models_.empty()) {
+            ImGui::Separator();
+            ImGui::Text("Model Selection:");
+
+            const char* current_name = (current_model_index_ >= 0 && current_model_index_ < (int)available_models_.size())
+                                       ? available_models_[current_model_index_].name.c_str()
+                                       : "None";
+
+            if (ImGui::BeginCombo("Model", current_name)) {
+                for (int i = 0; i < (int)available_models_.size(); i++) {
+                    bool is_selected = (i == current_model_index_);
+                    if (ImGui::Selectable(available_models_[i].name.c_str(), is_selected)) {
+                        if (i != current_model_index_) {
+                            switchModel(i);
+                        }
+                    }
+                    if (is_selected) {
+                        ImGui::SetItemDefaultFocus();
+                    }
+                }
+                ImGui::EndCombo();
+            }
+        }
+
         ImGui::Text("Click to place object on detected plane");
         ImGui::Text("ESC to quit");
 
@@ -490,7 +601,10 @@ void ARViewer::render()
         std::lock_guard<std::mutex> lk(obj_mutex_);
         for (auto& obj : objects_) {
             if (!obj.gpu_uploaded) {
-                obj.mesh.loadTexture(obj.texture_path);
+                // Upload texture to GPU (was loaded to CPU earlier)
+                if (!obj.texture_path.empty()) {
+                    obj.mesh.uploadTextureGPU(obj.texture_path);
+                }
                 obj.mesh.uploadToGPU();
                 obj.gpu_uploaded = true;
             }
@@ -499,25 +613,44 @@ void ARViewer::render()
 
     renderBackground();
     if (show_map_points_) renderMapPoints();
+    // Note: Occlusion features removed - virtual objects always visible
     renderVirtualObjects();
 }
 
 void ARViewer::renderBackground()
 {
     cv::Mat frame;
-    {
+
+    // Gaussian background preview (optional, has training latency)
+    if (pGausMapper_ && show_gaussian_bg_ && pGausMapper_->getIteration() > 0) {
+        Sophus::SE3f T_cw;
+        {
+            std::lock_guard<std::mutex> lk(pose_mutex_);
+            // current_pose_ is already T_cw (world to camera) from SLAM
+            // renderFromPose expects T_cw, so use it directly
+            T_cw = current_pose_;
+        }
+        cv::Mat gauss_rgb = pGausMapper_->renderFromPose(T_cw, img_w_, img_h_, true);
+        if (!gauss_rgb.empty()) {
+            cv::Mat gauss_bgr;
+            gauss_rgb.convertTo(gauss_bgr, CV_8UC3, 255.0);
+            cv::cvtColor(gauss_bgr, gauss_bgr, cv::COLOR_RGB2BGR);
+            frame = gauss_bgr;
+        }
+    }
+
+    // Fallback: real camera frame
+    if (frame.empty()) {
         std::lock_guard<std::mutex> lk(img_mutex_);
         frame = current_bgr_.clone();
     }
     if (frame.empty()) return;
 
-    // Flip vertically — same as AR_course loadframe_opencv
     cv::Mat flipped;
     cv::flip(frame, flipped, 0);
 
     glDisable(GL_DEPTH_TEST);
 
-    // Upload camera frame to texture
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, bg_tex_);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB,
@@ -536,22 +669,48 @@ void ARViewer::renderBackground()
 
 void ARViewer::renderVirtualObjects()
 {
+    // Ensure depth test is properly configured for object rendering
+    glEnable(GL_DEPTH_TEST);
+    glDepthMask(GL_TRUE);
+    glDepthFunc(GL_LESS);
+
     glm::mat4 P = buildProjectionMatrix();
     glm::mat4 V = buildViewMatrix();
 
-    // Simple fixed directional light (can be replaced with SH estimate later)
-    glm::vec3 lightDir = glm::normalize(glm::vec3(0.3f, -0.8f, 0.5f));
-    glm::vec3 ambient  = glm::vec3(0.3f, 0.3f, 0.3f);
-
-    glUseProgram(obj_shader_);
-    glUniform3fv(glGetUniformLocation(obj_shader_, "lightDir"),    1, &lightDir[0]);
-    glUniform3fv(glGetUniformLocation(obj_shader_, "ambientColor"),1, &ambient[0]);
-
-    static int debug_count = 0;
-
+    // Query lighting from Gaussian model for each object
     std::lock_guard<std::mutex> lk(obj_mutex_);
     for (auto& obj : objects_) {
         if (!obj.visible || !obj.mesh.loaded) continue;
+
+        // Get object position in world space
+        Eigen::Vector3f obj_pos = obj.pose.translation();
+
+        // Query lighting using Gaussian appearance embedding (fast, demonstrates neural gaussian power)
+        glm::vec3 lightDir = glm::normalize(glm::vec3(0.3f, -0.8f, 0.5f));  // Default
+        glm::vec3 ambient = glm::vec3(0.3f, 0.3f, 0.3f);  // Default
+
+        if (pGausMapper_ && use_gaussian_lighting_) {
+            // Get current camera pose
+            Sophus::SE3f T_cw;
+            {
+                std::lock_guard<std::mutex> lk(pose_mutex_);
+                T_cw = current_pose_;
+            }
+
+            // Query lighting from appearance embedding (much faster than MLP sampling)
+            float light_intensity = pGausMapper_->getLightingFromAppearance(T_cw);
+            if (light_intensity > 0.0f) {
+                // Adjust ambient based on learned appearance brightness
+                ambient = glm::vec3(0.2f, 0.2f, 0.2f) * (1.0f - light_intensity) +
+                          glm::vec3(0.5f, 0.5f, 0.5f) * light_intensity;
+            }
+        }
+
+        if (!obj.visible || !obj.mesh.loaded) continue;
+
+        glUseProgram(obj_shader_);
+        glUniform3fv(glGetUniformLocation(obj_shader_, "lightDir"),    1, &lightDir[0]);
+        glUniform3fv(glGetUniformLocation(obj_shader_, "ambientColor"),1, &ambient[0]);
 
         // Build model matrix from Sophus pose + scale
         Eigen::Matrix3f R = obj.pose.rotationMatrix();
@@ -567,15 +726,13 @@ void ARViewer::renderVirtualObjects()
 
         glm::mat4 MVP = P * V * M;
 
-        // Debug: print where model origin projects to (once every 60 frames)
-        if (debug_count % 60 == 0) {
-            glm::vec4 clip = MVP * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
-            glm::vec4 ndc  = clip / clip.w;
-            std::cerr << "[AR debug] obj=" << obj.name
-                      << " clip=(" << clip.x << "," << clip.y << "," << clip.z << "," << clip.w << ")"
-                      << " ndc=("  << ndc.x  << "," << ndc.y  << "," << ndc.z  << ")"
-                      << " visible=" << obj.visible
-                      << std::endl;
+        // Debug: print object NDC position (overwrite same line)
+        static int obj_debug_count = 0;
+        if (obj_debug_count++ % 30 == 0) {
+            glm::vec4 ndc = MVP * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+            ndc /= ndc.w;
+            std::cout << "\r[Obj] " << obj.name << " ndc.z=" << std::fixed << std::setprecision(4) << ndc.z
+                      << "      " << std::flush;
         }
 
         glUniformMatrix4fv(glGetUniformLocation(obj_shader_, "MVP"),   1, GL_FALSE, &MVP[0][0]);
@@ -592,7 +749,6 @@ void ARViewer::renderVirtualObjects()
         glDrawArrays(GL_TRIANGLES, 0, (GLsizei)obj.mesh.vertices.size());
         glBindVertexArray(0);
     }
-    debug_count++;
 }
 
 void ARViewer::renderMapPoints()
@@ -635,14 +791,11 @@ void ARViewer::renderMapPoints()
         }
     }
 
-    if (vertices.empty()) {
-        std::cout << "[AR debug] No visible map points" << std::endl;
-        return;
-    }
+    if (vertices.empty()) return;
 
-    static int debug_frame = 0;
-    if (debug_frame++ % 60 == 0) {
-        std::cout << "[AR debug] Rendering " << visible_count << " map points" << std::endl;
+    static int mp_debug_frame = 0;
+    if (mp_debug_frame++ % 30 == 0) {
+        std::cout << "\r[MapPts] " << visible_count << "      " << std::flush;
     }
 
     // Create/update VBO
@@ -675,8 +828,6 @@ void ARViewer::renderMapPoints()
     glBindVertexArray(0);
     glEnable(GL_DEPTH_TEST);  // re-enable for virtual objects
 }
-
-// ---- Projection / View matrices ----
 
 glm::mat4 ARViewer::buildProjectionMatrix() const
 {
@@ -733,10 +884,11 @@ void ARViewer::setCurrentImage(const cv::Mat& bgr)
     current_bgr_ = bgr.clone();
 }
 
-void ARViewer::setCurrentPose(const Sophus::SE3f& T_wc)
+void ARViewer::setCurrentPose(const Sophus::SE3f& T_cw)
 {
     std::lock_guard<std::mutex> lk(pose_mutex_);
-    current_pose_ = T_wc;
+    // NOTE: ORB-SLAM3 TrackMonocular returns T_cw (world-to-camera)
+    current_pose_ = T_cw;
 }
 
 // ---- Object management ----
@@ -786,6 +938,128 @@ void ARViewer::removeObject(int id)
         objects_[id].mesh.freeGPU();
         objects_.erase(objects_.begin() + id);
     }
+}
+
+// ---- Model selection ----
+
+void ARViewer::scanModelsDirectory(const std::string& models_dir)
+{
+    available_models_.clear();
+    current_model_index_ = -1;
+
+    namespace fs = std::filesystem;
+
+    if (!fs::exists(models_dir) || !fs::is_directory(models_dir)) {
+        std::cerr << "[ARViewer] Models directory not found: " << models_dir << std::endl;
+        return;
+    }
+
+    // Scan each subdirectory in models/
+    for (const auto& entry : fs::directory_iterator(models_dir)) {
+        if (!entry.is_directory()) continue;
+
+        std::string folder_name = entry.path().filename().string();
+        std::string folder_path = entry.path().string();
+
+        // Look for .obj file in the folder
+        std::string obj_file;
+        std::string texture_file;
+
+        for (const auto& file : fs::directory_iterator(entry.path())) {
+            if (!file.is_regular_file()) continue;
+
+            std::string ext = file.path().extension().string();
+            std::string fname = file.path().filename().string();
+
+            // Find first .obj file
+            if (ext == ".obj" || ext == ".OBJ") {
+                obj_file = file.path().string();
+            }
+            // Find texture (prefer png, then jpg)
+            else if (ext == ".png" || ext == ".PNG" ||
+                     ext == ".jpg" || ext == ".JPG" ||
+                     ext == ".jpeg" || ext == ".JPEG") {
+                // Prefer files named similarly to folder, or any texture
+                if (texture_file.empty() ||
+                    fname.find(folder_name) != std::string::npos) {
+                    texture_file = file.path().string();
+                }
+            }
+        }
+
+        if (!obj_file.empty()) {
+            ModelConfig config;
+            config.name = folder_name;
+            config.obj_path = obj_file;
+            config.texture_path = texture_file;
+            config.default_scale = glm::vec3(0.3f, 0.3f, 0.3f);  // Default scale
+            config.default_y_offset = 0.0f;
+
+            // Model-specific defaults
+            if (folder_name == "SpongeBob" || folder_name == "spongebob") {
+                config.default_scale = glm::vec3(0.3f, 0.3f, 0.3f);
+                config.default_y_offset = 0.3f;
+            }
+
+            available_models_.push_back(config);
+            std::cout << "[ARViewer] Found model: " << config.name
+                      << " (obj=" << config.obj_path << ", tex=" << config.texture_path << ")" << std::endl;
+        }
+    }
+
+    std::cout << "[ARViewer] Total models found: " << available_models_.size() << std::endl;
+}
+
+bool ARViewer::switchModel(int model_index)
+{
+    if (model_index < 0 || model_index >= (int)available_models_.size()) {
+        std::cerr << "[ARViewer] Invalid model index: " << model_index << std::endl;
+        return false;
+    }
+
+    const ModelConfig& config = available_models_[model_index];
+
+    std::lock_guard<std::mutex> lk(obj_mutex_);
+
+    // Remove existing objects
+    for (auto& obj : objects_) {
+        obj.mesh.freeGPU();
+    }
+    objects_.clear();
+
+    // Create rotation to fix orientation (same as original)
+    Eigen::AngleAxisf rot_x(-(float)M_PI / 2.0f, Eigen::Vector3f::UnitX());
+    Sophus::SE3f obj_pose(
+        Eigen::Quaternionf(rot_x),
+        Eigen::Vector3f(0.0f, 0.0f, config.default_y_offset));
+
+    // Add new model
+    VirtualObject obj;
+    obj.name = config.name;
+    obj.obj_path = config.obj_path;
+    obj.texture_path = config.texture_path;
+    obj.pose = obj_pose;
+    obj.scale = config.default_scale;
+    obj.visible = false;  // Hidden until placed
+    obj.gpu_uploaded = false;
+
+    // Load mesh (CPU only)
+    if (!obj.mesh.loadOBJ(obj.obj_path)) {
+        std::cerr << "[ARViewer] Failed to load OBJ: " << obj.obj_path << std::endl;
+        return false;
+    }
+
+    // Load texture to CPU (GPU upload happens in render() when context is ready)
+    if (!obj.texture_path.empty()) {
+        obj.mesh.loadTexture(obj.texture_path);  // This only loads to CPU, not GPU
+    }
+
+    int id = (int)objects_.size();
+    objects_.push_back(std::move(obj));
+    current_model_index_ = model_index;
+
+    std::cout << "[ARViewer] Switched to model: " << config.name << " (id=" << id << ")" << std::endl;
+    return true;
 }
 
 // ---- Callbacks ----

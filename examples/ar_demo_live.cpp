@@ -109,25 +109,27 @@ int main(int argc, char** argv)
     cout << "Initializing AR Viewer..." << endl;
     ARViewer viewer(pSLAM, W, H, fx, fy, cx, cy);
 
-    // Place SpongeBob 1 m in front of camera origin
-    Sophus::SE3f obj_pose(
-        Eigen::Quaternionf::Identity(),
-        Eigen::Vector3f(0.0f, 0.0f, 1.0f));
+    // Scan for available models
+    viewer.scanModelsDirectory("models");
 
-    int obj_id = viewer.addObject(
-        "SpongeBob",
-        "SpongeBob/spongebob.obj",
-        "SpongeBob/spongebob.png",
-        obj_pose,
-        glm::vec3(0.3f, 0.3f, 0.3f));
+    // If no models found, fall back to legacy SpongeBob folder
+    if (viewer.getAvailableModels().empty()) {
+        cout << "No models/ directory found, trying legacy SpongeBob/ folder..." << endl;
+        viewer.scanModelsDirectory(".");
+    }
 
-    if (obj_id < 0) {
-        cerr << "Failed to load SpongeBob model. "
-                "Make sure SpongeBob/ folder is in the working directory." << endl;
+    // Load first available model
+    if (!viewer.getAvailableModels().empty()) {
+        if (!viewer.switchModel(0)) {
+            cerr << "Failed to load initial model." << endl;
+            return 1;
+        }
+        cout << "Loaded model: " << viewer.getAvailableModels()[0].name << endl;
+    } else {
+        cerr << "No models found! Please place .obj files in models/ folder." << endl;
         return 1;
     }
 
-    cout << "SpongeBob loaded (id=" << obj_id << ")" << endl;
     cout << "Controls:  ESC = quit" << endl;
     cout << "Note: Monocular SLAM needs a few seconds of movement to initialise." << endl;
 
@@ -170,7 +172,9 @@ int main(int argc, char** argv)
         viewer.setCurrentPose(T_wc);
 
         // Show model only when tracking is good (state == 2)
-        viewer.setObjectVisible(obj_id, state == 2);
+        if (!viewer.getAvailableModels().empty()) {
+            viewer.setObjectVisible(0, state == 2);
+        }
 
         if (++frame_no % 30 == 0) {
             cout << "\rFrame " << frame_no

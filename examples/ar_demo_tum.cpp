@@ -2,12 +2,12 @@
  * AR Demo — TUM Dataset, Monocular (no depth required)
  *
  * Usage:
- *   ./ar_demo_tum vocab.bin settings.yaml /path/to/dataset
+ *   ./ar_demo_tum vocab.bin settings.yaml /path/to/dataset [gaussian_cfg] [output_dir]
  *
  * Only needs rgb.txt inside the dataset folder, no associations needed.
  *
  * Rendering pipeline (same as AR_course Ubuntu):
- *   1. Background = raw camera frame
+ *   1. Background = raw camera frame (or Gaussian render if mapper is ready)
  *   2. Foreground = SpongeBob .obj rendered with SLAM pose
  */
 
@@ -19,11 +19,14 @@
 #include <chrono>
 #include <memory>
 #include <cstdlib>
+#include <filesystem>
 
 #include <opencv2/opencv.hpp>
+#include <torch/torch.h>
 
 #include "include/ar_viewer.h"
 #include "ORB-SLAM3/include/System.h"
+#include "include/gaussian_mapper.h"
 
 using namespace std;
 using namespace SPGS;
@@ -52,18 +55,50 @@ int main(int argc, char** argv)
 {
     if (argc < 4) {
         cout << "Usage: " << argv[0]
-             << " vocab settings dataset_path" << endl;
-        cout << "Example:" << endl;
+             << " vocab orb_settings [gaussian_cfg] dataset_path [output_dir]" << endl;
+        cout << "Example (SLAM only):" << endl;
         cout << "  " << argv[0]
-             << " ORB-SLAM3/Vocabulary/ORBvoc.bin"
+             << " ORB-SLAM3/Vocabulary/SPvoc.bin"
                 " cfg/ORB_SLAM3/Monocular/TUM/tum_freiburg1_desk.yaml"
                 " /data/rgbd_dataset_freiburg1_desk" << endl;
+        cout << "Example (with Gaussian):" << endl;
+        cout << "  " << argv[0]
+             << " ORB-SLAM3/Vocabulary/SPvoc.bin"
+                " cfg/ORB_SLAM3/Monocular/TUM/tum_freiburg1_desk.yaml"
+                " cfg/gaussian_mapper/Monocular/TUM/tum_freiburg1_desk.yaml"
+                " /data/rgbd_dataset_freiburg1_desk"
+                " ./output/ar_tum_output" << endl;
         return 1;
     }
 
-    const string vocab       = argv[1];
-    const string settings    = argv[2];
-    const string dataset_dir = argv[3];
+    const string vocab    = argv[1];
+    const string settings = argv[2];
+
+    // Detect if argv[3] is a gaussian config (ends in .yaml) or a dataset path
+    // Layout A (5-6 args): vocab orb_cfg gaussian_cfg dataset [output]
+    // Layout B (3-4 args): vocab orb_cfg dataset [output]   (no gaussian)
+    string gaussian_cfg_str;
+    string dataset_dir;
+    string output_dir_str = "./output/ar_tum_output";
+
+    bool use_gaussian = false;
+
+    if (argc >= 5) {
+        // argv[3] = gaussian_cfg, argv[4] = dataset, argv[5] (opt) = output
+        gaussian_cfg_str = argv[3];
+        dataset_dir      = argv[4];
+        output_dir_str   = (argc >= 6) ? argv[5] : output_dir_str;
+        use_gaussian     = true;
+    } else {
+        // argv[3] = dataset  (no gaussian)
+        dataset_dir = argv[3];
+    }
+
+    if (use_gaussian)
+        cout << "GaussianMapper enabled: " << gaussian_cfg_str << "\n"
+             << "Output dir: " << output_dir_str << endl;
+    else
+        cout << "GaussianMapper disabled (pass gaussian_cfg as argv[3] to enable)" << endl;
 
     // ----------------------------------------------------------------
     // Read camera intrinsics from settings file
@@ -117,35 +152,61 @@ int main(int argc, char** argv)
     float imageScale = pSLAM->GetImageScale();
 
     // ----------------------------------------------------------------
+    // Init GaussianMapper (optional — requires GPU and gaussian cfg)
+    // ----------------------------------------------------------------
+    shared_ptr<GaussianMapper> pGausMapper;
+    thread training_thd;
+
+    if (use_gaussian) {
+        // Detect device
+        torch::DeviceType device_type = torch::cuda::is_available()
+            ? torch::kCUDA : torch::kCPU;
+        cout << (device_type == torch::kCUDA
+            ? "CUDA available — GaussianMapper on GPU"
+            : "Warning: CUDA not found — GaussianMapper on CPU (slow)") << endl;
+
+        filesystem::path gauss_cfg(gaussian_cfg_str);
+        filesystem::path out_dir(output_dir_str);
+        if (!out_dir.empty() && !filesystem::exists(out_dir))
+            filesystem::create_directories(out_dir);
+
+        pGausMapper = make_shared<GaussianMapper>(
+            pSLAM, gauss_cfg, out_dir, /*seed=*/0, device_type);
+        training_thd = thread(&GaussianMapper::run, pGausMapper.get());
+        cout << "GaussianMapper training thread started." << endl;
+    }
+
+    // ----------------------------------------------------------------
     // Init AR Viewer
     // ----------------------------------------------------------------
     cout << "Initializing AR Viewer..." << endl;
     ARViewer viewer(pSLAM, W, H, fx, fy, cx, cy);
 
-    // Place SpongeBob near the initial camera position.
-    // Rotate -90 deg around X to fix orientation (same as AR_course controls.cpp)
-    Eigen::AngleAxisf rot_x(-(float)M_PI / 2.0f, Eigen::Vector3f::UnitX());
-    Sophus::SE3f obj_pose(
-        Eigen::Quaternionf(rot_x),
-        Eigen::Vector3f(0.0f, 0.0f, 0.3f));
+    // Pass GaussianMapper pointer to viewer (nullptr if disabled)
+    if (pGausMapper)
+        viewer.setGaussianMapper(pGausMapper);
 
-    int obj_id = viewer.addObject(
-        "SpongeBob",
-        "SpongeBob/spongebob.obj",
-        "SpongeBob/spongebob.png",
-        obj_pose,
-        glm::vec3(0.3f, 0.3f, 0.3f));
+    // Scan for available models
+    viewer.scanModelsDirectory("models");
 
-    // Hidden until user clicks to place
-    viewer.setObjectVisible(obj_id, false);
+    // If no models found, fall back to legacy SpongeBob folder
+    if (viewer.getAvailableModels().empty()) {
+        cout << "No models/ directory found, trying legacy SpongeBob/ folder..." << endl;
+        viewer.scanModelsDirectory(".");
+    }
 
-    if (obj_id < 0) {
-        cerr << "Failed to load SpongeBob model. "
-                "Make sure SpongeBob/ folder is in the working directory." << endl;
+    // Load first available model
+    if (!viewer.getAvailableModels().empty()) {
+        if (!viewer.switchModel(0)) {
+            cerr << "Failed to load initial model." << endl;
+            return 1;
+        }
+        cout << "Loaded model: " << viewer.getAvailableModels()[0].name << endl;
+    } else {
+        cerr << "No models found! Please place .obj files in models/ folder." << endl;
         return 1;
     }
 
-    cout << "SpongeBob loaded (id=" << obj_id << ")" << endl;
     cout << "Controls:  ESC = quit" << endl;
     cout << "Note: Monocular SLAM needs translation motion to initialise." << endl;
 
@@ -182,20 +243,20 @@ int main(int argc, char** argv)
         cv::Mat im_rgb;
         cv::cvtColor(im, im_rgb, cv::COLOR_BGR2RGB);
 
-        // Track
-        Sophus::SE3f T_wc = pSLAM->TrackMonocular(im_rgb, tframe);
+        // Track - TrackMonocular returns T_cw (world-to-camera)
+        Sophus::SE3f T_cw = pSLAM->TrackMonocular(im_rgb, tframe);
         int state = pSLAM->GetTrackingState();
 
         // Update viewer — pass BGR for natural-colour background
         viewer.setCurrentImage(im);
-        viewer.setCurrentPose(T_wc);
+        viewer.setCurrentPose(T_cw);  // T_cw stored directly
         // Object visibility is controlled by mouse click
 
         // Progress
         if ((ni + 1) % 30 == 0)
             cout << "\rFrame " << (ni + 1) << "/" << nImages
                  << "  state=" << state
-                 << "  t=(" << T_wc.translation().transpose() << ")"
+                 << "  t=(" << T_cw.translation().transpose() << ")"
                  << "    " << flush;
 
         // Pace playback to ~30 fps
@@ -208,8 +269,16 @@ int main(int argc, char** argv)
 
     cout << "\nDone." << endl;
 
+    // Signal GaussianMapper to stop before SLAM shutdown
+    if (pGausMapper)
+        pGausMapper->signalStop();
+
     pSLAM->Shutdown();  // stop SLAM first
     viewer.stop();      // then close GL window
+
+    // Wait for training thread
+    if (training_thd.joinable())
+        training_thd.join();
 
     // Use _Exit to avoid LLVM/PyTorch atexit crash (known issue)
     std::_Exit(0);

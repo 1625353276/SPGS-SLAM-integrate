@@ -122,6 +122,22 @@ public:
         torch::Tensor rotations,
         torch::Tensor cov3D_precomp);
 
+    // Same as forward() but also returns a per-pixel depth map (for AR occlusion)
+    std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> forwardWithDepth(
+        torch::Tensor means3D,
+        torch::Tensor means2D,
+        torch::Tensor opacities,
+        bool has_shs,
+        bool has_colors_precomp,
+        bool has_scales,
+        bool has_rotations,
+        bool has_cov3D_precomp,
+        torch::Tensor shs,
+        torch::Tensor colors_precomp,
+        torch::Tensor scales,
+        torch::Tensor rotations,
+        torch::Tensor cov3D_precomp);
+
     torch::Tensor visible_filter(
         torch::Tensor means3D,
         bool has_scales,

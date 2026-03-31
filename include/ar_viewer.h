@@ -3,9 +3,10 @@
  *
  * Architecture (same as AR_course Ubuntu version):
  *   1. Background: camera frame uploaded as OpenGL texture (glDisable depth test)
- *   2. Foreground: virtual .obj model rendered with SLAM pose MVP matrix (glEnable depth test)
+ *   2. MapPoint depth pass: sparse depth from SLAM map points written to depth buffer
+ *   3. Foreground: virtual .obj model rendered with SLAM pose (glEnable depth test)
  *
- * Optionally uses GaussianMapper depth for occlusion.
+ * Optionally uses GaussianMapper for background preview rendering.
  */
 
 #pragma once
@@ -62,14 +63,30 @@ struct ObjMesh
     // Load .obj file (v/vt/vn format, triangulated)
     bool loadOBJ(const std::string& obj_path);
 
-    // Load texture from image file (PNG/JPG) via OpenCV
+    // Load texture from image file (PNG/JPG) via OpenCV (CPU only)
     bool loadTexture(const std::string& img_path);
+
+    // Upload texture to GPU (call from GL thread)
+    void uploadTextureGPU(const std::string& img_path);
 
     // Upload to GPU
     void uploadToGPU();
 
     // Free GPU resources
     void freeGPU();
+};
+
+// ============================================================================
+// Model Configuration (for model selection)
+// ============================================================================
+
+struct ModelConfig
+{
+    std::string name;           // Display name
+    std::string obj_path;       // Path to .obj file
+    std::string texture_path;   // Path to texture file
+    glm::vec3   default_scale;  // Default scale for this model
+    float       default_y_offset; // Default Y offset for placement
 };
 
 // ============================================================================
@@ -159,8 +176,8 @@ public:
     // Set current camera frame as background
     void setCurrentImage(const cv::Mat& bgr);
 
-    // Set SLAM tracking pose
-    void setCurrentPose(const Sophus::SE3f& T_wc);
+    // Set SLAM tracking pose (T_cw: world-to-camera transform from TrackMonocular)
+    void setCurrentPose(const Sophus::SE3f& T_cw);
 
     // ---- Virtual objects ----
 
@@ -176,25 +193,56 @@ public:
     void removeObject(int id);
 
     // Move object to clicked screen position (assumes fixed depth)
-    // px, py are in screen pixels (origin at top-left)
     void moveObjectToScreenPos(int obj_id, double px, double py, float depth = 0.5f);
 
-    // Move object to nearest map point from screen click
-    // Returns true if a map point was found within max_pixel_dist
+    // Move object to nearest map point from screen click (with plane detection)
     bool moveObjectToNearestMapPoint(int obj_id, double px, double py, float max_pixel_dist = 30.0f);
 
     // Toggle map point visualization
     void setShowMapPoints(bool show) { show_map_points_ = show; }
     bool showMapPoints() const { return show_map_points_; }
 
+    // Attach GaussianMapper for background preview rendering (optional)
+    void setGaussianMapper(std::shared_ptr<GaussianMapper> pGausMapper) {
+        pGausMapper_ = pGausMapper;
+    }
+
+    // Toggle Gaussian background preview (has training latency, for visual inspection)
+    void setShowGaussianBg(bool show) { show_gaussian_bg_ = show; }
+    bool showGaussianBg() const { return show_gaussian_bg_; }
+
+    // Toggle Gaussian-based lighting estimation for virtual objects
+    void setGaussianLighting(bool enable) { use_gaussian_lighting_ = enable; }
+    bool gaussianLighting() const { return use_gaussian_lighting_; }
+
     // Plane detection status message (empty = no error)
     std::string plane_status_msg_;
 
-private:
-    bool show_map_points_ = false;
+    // ---- Model selection ----
 
-    // Render map points as small dots
+    // Scan models directory and populate available_models_
+    void scanModelsDirectory(const std::string& models_dir = "models");
+
+    // Get list of available models
+    const std::vector<ModelConfig>& getAvailableModels() const { return available_models_; }
+
+    // Switch to a different model (replaces current object)
+    bool switchModel(int model_index);
+
+    // Get current model index
+    int getCurrentModelIndex() const { return current_model_index_; }
+
+private:
+    bool show_map_points_   = false;
+    bool show_gaussian_bg_  = false;   // Gaussian background preview
+    bool use_gaussian_lighting_ = true; // Use Gaussian MLP to estimate lighting for virtual objects
+
+    // Gaussian Mapper (optional)
+    std::shared_ptr<GaussianMapper> pGausMapper_;
+
+    // Render map points as small dots (visualization)
     void renderMapPoints();
+
     bool initGL();
     void initShaders();
     void initBackgroundQuad();
@@ -202,8 +250,8 @@ private:
 
     // Render steps
     void render();
-    void renderBackground();     // camera frame as full-screen quad
-    void renderVirtualObjects(); // .obj models with depth test
+    void renderBackground();
+    void renderVirtualObjects();
 
     // Projection matrix from camera intrinsics
     glm::mat4 buildProjectionMatrix() const;
@@ -211,17 +259,14 @@ private:
     // View matrix from SLAM pose
     glm::mat4 buildViewMatrix() const;
 
-    // Fit a plane from map points near the clicked screen position using RANSAC.
-    // Outputs the plane normal (pointing toward camera) and a point on the plane
-    // (centroid of inliers), both in world space.
-    // Returns false if not enough points or fitting quality is poor.
+    // RANSAC plane fitting from map points near clicked position
     bool fitPlaneFromMapPoints(double px, double py,
                                float search_radius_px,
                                Eigen::Vector3f& plane_normal,
                                Eigen::Vector3f& plane_point,
                                int min_inliers = 6);
 
-    // Keyboard callbacks
+    // Callbacks
     static void keyCallback(GLFWwindow* w, int key, int sc, int action, int mods);
     static void mouseCallback(GLFWwindow* w, int button, int action, int mods);
 
@@ -237,22 +282,26 @@ private:
     GLFWwindow* window_  = nullptr;
 
     // Shaders
-    GLuint bg_shader_   = 0;
-    GLuint obj_shader_  = 0;
-    GLuint point_shader_= 0;
+    GLuint bg_shader_    = 0;
+    GLuint obj_shader_   = 0;
+    GLuint point_shader_ = 0;
 
     // Background quad
     GLuint bg_vao_ = 0;
     GLuint bg_vbo_ = 0;
-    GLuint bg_tex_ = 0;  // camera frame texture
+    GLuint bg_tex_ = 0;
 
-    // Map points (for visualization)
+    // Map points (visualization + occlusion share same VAO/VBO)
     GLuint mp_vao_ = 0;
     GLuint mp_vbo_ = 0;
 
     // Virtual objects
     std::vector<VirtualObject> objects_;
     std::mutex                 obj_mutex_;
+
+    // Available models for selection
+    std::vector<ModelConfig> available_models_;
+    int current_model_index_ = -1;
 
     // Current camera frame & pose
     cv::Mat      current_bgr_;
@@ -262,7 +311,7 @@ private:
     std::mutex   pose_mutex_;
 
     std::atomic<bool> running_{false};
-    std::atomic<bool> gl_ready_{false};   // true after GL context + shaders ready
+    std::atomic<bool> gl_ready_{false};
     std::thread       thread_;
 };
 
