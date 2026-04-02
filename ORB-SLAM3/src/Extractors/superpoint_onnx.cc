@@ -19,7 +19,7 @@ int SuperPointOnnxRunner::InitOrtEnv(Configuration cfg)
             cuda_options.device_id = 0;
             cuda_options.cudnn_conv_algo_search = OrtCudnnConvAlgoSearchDefault;
             cuda_options.gpu_mem_limit = 0; 
-            cuda_options.arena_extend_strategy = 1; // 设置GPU内存管理中的Arena扩展策略
+            cuda_options.arena_extend_strategy = 0; // kSameAsRequested: 按需分配，用完归还
             cuda_options.do_copy_in_default_stream = 1; // 是否在默认CUDA流中执行数据复制
             cuda_options.has_user_compute_stream = 0;
             cuda_options.default_memory_arena_cfg = nullptr;
