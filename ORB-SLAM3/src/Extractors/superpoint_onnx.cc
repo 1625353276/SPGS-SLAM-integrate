@@ -1,8 +1,42 @@
 #include <thread>
 #include "Extractors/superpoint_onnx.h"
 
+// Static members for singleton pattern
+SuperPointOnnxRunner* SuperPointOnnxRunner::s_instance = nullptr;
+std::mutex SuperPointOnnxRunner::s_mutex;
+static bool s_initialized = false;
+
+SuperPointOnnxRunner* SuperPointOnnxRunner::GetInstance()
+{
+    if (s_instance == nullptr) {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        if (s_instance == nullptr) {
+            s_instance = new SuperPointOnnxRunner();
+        }
+    }
+    return s_instance;
+}
+
+void SuperPointOnnxRunner::DestroyInstance()
+{
+    std::lock_guard<std::mutex> lock(s_mutex);
+    if (s_instance != nullptr) {
+        delete s_instance;
+        s_instance = nullptr;
+        s_initialized = false;
+    }
+}
+
 int SuperPointOnnxRunner::InitOrtEnv(Configuration cfg)
 {
+    // Only initialize once
+    if (s_initialized) {
+        return EXIT_SUCCESS;
+    }
+    std::lock_guard<std::mutex> lock(s_mutex);
+    if (s_initialized) {
+        return EXIT_SUCCESS;
+    }
     std::cout << "< - * -------- INITIAL ONNXRUNTIME ENV START -------- * ->" << std::endl;
     try
     {
@@ -55,6 +89,7 @@ int SuperPointOnnxRunner::InitOrtEnv(Configuration cfg)
             ExtractorOutputNodeShapes.emplace_back(ExtractorSession->GetOutputTypeInfo(i).GetTensorTypeAndShapeInfo().GetShape());
         }
         std::cout << "[INFO] ONNXRuntime environment created successfully." << std::endl;
+        s_initialized = true;
     }
     catch(const std::exception& ex)
     {
@@ -87,6 +122,7 @@ cv::Mat SuperPointOnnxRunner::Extractor_PreProcess(Configuration cfg , const cv:
 
 int SuperPointOnnxRunner::Extractor_Inference(Configuration cfg , const cv::Mat& image)
 {   
+    std::lock_guard<std::mutex> lock(s_mutex);  // Protect inference from concurrent access
     extractor_outputtensors.clear();
     //std::cout << "< - * -------- Extractor Inference START -------- * ->"<< std::endl;
     try 
@@ -283,9 +319,5 @@ std::pair<std::vector<cv::Point2f>, std::vector<cv::Point2f>> SuperPointOnnxRunn
 
 SuperPointOnnxRunner::SuperPointOnnxRunner(unsigned int threads) : \
     num_threads(threads)
-{
-}
-
-SuperPointOnnxRunner::~SuperPointOnnxRunner()
 {
 }

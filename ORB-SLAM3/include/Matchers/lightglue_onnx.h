@@ -1,5 +1,6 @@
 #include <iostream>
 #include <chrono>
+#include <mutex>
 #include <opencv2/opencv.hpp>
 #include <onnxruntime_cxx_api.h>
 
@@ -9,8 +10,11 @@
 
 class LightGlueDecoupleOnnxRunner
 {
-public:
-	const unsigned int num_threads;
+private:
+    static LightGlueDecoupleOnnxRunner* s_instance;
+    static std::mutex s_mutex;
+
+    const unsigned int num_threads;
 
     Ort::Env env0 , env1;
     Ort::SessionOptions session_options0 , session_options1;
@@ -38,8 +42,15 @@ public:
     std::vector<Ort::Value> matcher_outputtensors;
 
     std::pair<std::vector<cv::Point2f>, std::vector<cv::Point2f>> keypoints_result;
-    
+
+    // Private constructor for singleton
+    LightGlueDecoupleOnnxRunner(unsigned int num_threads = 1);
+
 public:
+    // Singleton pattern: get shared instance
+    static LightGlueDecoupleOnnxRunner* GetInstance();
+    static void DestroyInstance();
+
     // cv::Mat Extractor_PreProcess(Configuration cfg , const cv::Mat& srcImage , float& scale);
     int Extractor_Inference(Configuration cfg , const cv::Mat& image);
     std::pair<std::vector<cv::Point2f> , float*> Extractor_PostProcess(Configuration cfg , std::vector<Ort::Value> tensor);
@@ -50,9 +61,6 @@ public:
     int Matcher_PostProcess(Configuration cfg , std::vector<cv::Point2f> kpts0 , std::vector<cv::Point2f> kpts1);
     int Matcher_PostProcess_fused(std::vector<Ort::Value>& output, std::vector<cv::Point2f> kpts0 , std::vector<cv::Point2f> kpts1,std::vector<int>& vnMatches1);
     //int Matcher_PostProcess_fused(std::vector<Ort::Value>& output, std::vector<cv::Point2f> kpts0, std::vector<cv::Point2f> kpts1, std::vector<int>& vnMatches12)
-public:
-    explicit LightGlueDecoupleOnnxRunner(unsigned int num_threads = 1);
-    ~LightGlueDecoupleOnnxRunner();
 
     float GetMatchThresh();
     void SetMatchThresh(float thresh);
@@ -61,7 +69,7 @@ public:
     std::pair<std::vector<cv::Point2f>, std::vector<cv::Point2f>> GetKeypointsResult();
 
     int InitOrtEnv(Configuration cfg);
-    
+
     std::pair<std::vector<cv::Point2f>, std::vector<cv::Point2f>> InferenceImage(Configuration cfg , \
             const cv::Mat& srcImage, const cv::Mat& destImage);
 };

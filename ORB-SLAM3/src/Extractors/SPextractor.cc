@@ -90,13 +90,14 @@ SPextractor::SPextractor(int _nfeatures, float _scaleFactor, int _nlevels,
     nfeatures(_nfeatures), scaleFactor(_scaleFactor), nlevels(_nlevels),
     iniThFAST(_iniThFAST), minThFAST(_minThFAST)
 {
-   
+
     if(mModelstr == "onnx")
     {   Configuration cfg;
         cfg.device = "cuda";
         cfg.extractorPath = "onnxmodel/superpoint.onnx";
         cfg.extractorType = "superpoint";
-        featureExtractor = new SuperPointOnnxRunner();
+        // Use singleton instance instead of creating new one
+        featureExtractor = SuperPointOnnxRunner::GetInstance();
         featureExtractor->InitOrtEnv(cfg);
 
     }

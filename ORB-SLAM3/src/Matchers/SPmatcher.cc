@@ -20,7 +20,8 @@ SPmatcher::SPmatcher(float thre)
     cfg.device = "cuda";
     cfg.extractorPath = "";
     cfg.extractorType = "";
-    featureMatcher = new LightGlueDecoupleOnnxRunner();
+    // Use singleton instance instead of creating new one
+    featureMatcher = LightGlueDecoupleOnnxRunner::GetInstance();
     featureMatcher->InitOrtEnv(cfg);
     featureMatcher->SetMatchThresh(thre);
     std::string mode = "LightGlueDecoupleOnnxRunner";
