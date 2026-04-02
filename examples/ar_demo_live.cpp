@@ -55,8 +55,9 @@ int main(int argc, char** argv)
     }
 
     // ORB-SLAM3 newer yaml uses Camera1.fx, older uses Camera.fx
-    int   W  = (int)fs["Camera.width"];
-    int   H  = (int)fs["Camera.height"];
+    int   W   = (int)fs["Camera.width"];
+    int   H   = (int)fs["Camera.height"];
+    int   FPS = (int)fs["Camera.fps"];
 
     float fx = (float)fs["Camera1.fx"];
     float fy = (float)fs["Camera1.fy"];
@@ -76,25 +77,9 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    cout << "Camera: " << W << "x" << H
+    cout << "Camera: " << W << "x" << H << " @ " << FPS << "fps"
          << "  fx=" << fx << " fy=" << fy
          << " cx=" << cx << " cy=" << cy << endl;
-
-    // ----------------------------------------------------------------
-    // Open webcam
-    // ----------------------------------------------------------------
-    cv::VideoCapture cap(cam_id);
-    if (!cap.isOpened()) {
-        cerr << "Cannot open camera id=" << cam_id << endl;
-        return 1;
-    }
-    cap.set(cv::CAP_PROP_FRAME_WIDTH,  W);
-    cap.set(cv::CAP_PROP_FRAME_HEIGHT, H);
-    cap.set(cv::CAP_PROP_FPS, 30);
-
-    cout << "Camera opened: "
-         << cap.get(cv::CAP_PROP_FRAME_WIDTH)  << "x"
-         << cap.get(cv::CAP_PROP_FRAME_HEIGHT) << endl;
 
     // ----------------------------------------------------------------
     // Init SLAM (Monocular, no built-in viewer)
@@ -140,16 +125,74 @@ int main(int argc, char** argv)
     viewer.waitUntilReady();  // block until GL context + shaders ready
 
     // ----------------------------------------------------------------
+    // SLAM+Viewer 初始化完成后才打开摄像头，避免 V4L2 超时
+    // ----------------------------------------------------------------
+    cout << "Opening camera..." << endl;
+
+    // 尝试多种后端
+    cv::VideoCapture cap;
+
+    // 1. 尝试 V4L2 后端
+    cout << "[CAM] Trying V4L2 backend..." << endl;
+    cap.open(cam_id, cv::CAP_V4L2);
+    if (cap.isOpened()) {
+        cout << "[CAM] V4L2 backend OK" << endl;
+    } else {
+        // 2. 尝试默认后端
+        cout << "[CAM] V4L2 failed, trying default backend..." << endl;
+        cap.open(cam_id);
+        if (cap.isOpened()) {
+            cout << "[CAM] Default backend OK" << endl;
+        } else {
+            cerr << "[CAM] Cannot open camera id=" << cam_id << endl;
+            return 1;
+        }
+    }
+
+    // 强制使用 MJPEG 格式，和 ffplay 一致
+    cap.set(cv::CAP_PROP_FOURCC, cv::VideoWriter::fourcc('M', 'J', 'P', 'G'));
+    cap.set(cv::CAP_PROP_FRAME_WIDTH,  W);
+    cap.set(cv::CAP_PROP_FRAME_HEIGHT, H);
+    if (FPS > 0)
+        cap.set(cv::CAP_PROP_FPS, FPS);
+    cout << "Camera opened: "
+         << cap.get(cv::CAP_PROP_FRAME_WIDTH)  << "x"
+         << cap.get(cv::CAP_PROP_FRAME_HEIGHT) << endl;
+
+    // 测试读一帧确认能工作
+    cout << "[CAM] Testing frame read..." << endl;
+    cv::Mat test_frame;
+    cap >> test_frame;
+    if (test_frame.empty()) {
+        cerr << "[CAM] WARNING: First frame is empty!" << endl;
+    } else {
+        cout << "[CAM] First frame OK: " << test_frame.cols << "x" << test_frame.rows
+             << " channels=" << test_frame.channels()
+             << " mean=" << cv::mean(test_frame)[0] << endl;
+    }
+
+    // ----------------------------------------------------------------
     // Main loop: grab frame → SLAM → update viewer
     // ----------------------------------------------------------------
     cv::Mat frame;
     int frame_no = 0;
 
     while (viewer.isRunning()) {
-        cap >> frame;
+        if (!cap.grab()) {
+            cerr << "Failed to grab frame from camera" << endl;
+            break;
+        }
+        cap.retrieve(frame);
         if (frame.empty()) {
             cerr << "Empty frame from camera" << endl;
             break;
+        }
+
+        // 调试：前10帧打印帧信息确认摄像头有数据
+        if (frame_no < 10) {
+            cerr << "[DBG] frame " << frame_no
+                 << " size=" << frame.cols << "x" << frame.rows
+                 << " mean=" << cv::mean(frame)[0] << endl;
         }
 
         // Resize if camera didn't honour the request
