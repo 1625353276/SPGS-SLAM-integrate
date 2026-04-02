@@ -1,0 +1,56 @@
+%YAML:1.0
+
+#--------------------------------------------------------------------------------------------
+# Webcam / USB camera — generic 640x480 calibration
+# Replace Camera1.fx/fy/cx/cy/k1/k2/p1/p2/k3 with values from YOUR camera calibration.
+# The defaults below are reasonable starting values for a typical 640x480 webcam.
+#--------------------------------------------------------------------------------------------
+File.version: "1.0"
+
+Camera.type: "PinHole"
+
+# Intrinsics (pixels) — calibrate with OpenCV or use manufacturer spec
+Camera1.fx: 600.0
+Camera1.fy: 600.0
+Camera1.cx: 320.0
+Camera1.cy: 240.0
+
+# Distortion coefficients — set to 0 if unknown / already undistorted
+Camera1.k1: 0.0
+Camera1.k2: 0.0
+Camera1.p1: 0.0
+Camera1.p2: 0.0
+Camera1.k3: 0.0
+
+# Camera frames per second
+Camera.fps: 30
+
+# Color order (0: BGR, 1: RGB)
+Camera.RGB: 1
+
+# Resolution
+Camera.width: 640
+Camera.height: 480
+
+#--------------------------------------------------------------------------------------------
+# ORB Parameters
+#--------------------------------------------------------------------------------------------
+ORBextractor.nFeatures: 2000
+ORBextractor.scaleFactor: 1.2
+ORBextractor.nLevels: 8
+ORBextractor.iniThFAST: 20
+ORBextractor.minThFAST: 7
+
+#--------------------------------------------------------------------------------------------
+# Viewer Parameters
+#--------------------------------------------------------------------------------------------
+Viewer.KeyFrameSize: 0.05
+Viewer.KeyFrameLineWidth: 1.0
+Viewer.GraphLineWidth: 0.9
+Viewer.PointSize: 2.0
+Viewer.CameraSize: 0.08
+Viewer.CameraLineWidth: 3.0
+Viewer.ViewpointX: 0.0
+Viewer.ViewpointY: -0.7
+Viewer.ViewpointZ: -1.8
+Viewer.ViewpointF: 500.0

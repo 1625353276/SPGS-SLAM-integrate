@@ -207,6 +207,73 @@ GaussianRasterizer::forward(
     return std::make_tuple(result[0], result[1]);
 }
 
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
+GaussianRasterizer::forwardWithDepth(
+    torch::Tensor means3D,
+    torch::Tensor means2D,
+    torch::Tensor opacities,
+    bool has_shs,
+    bool has_colors_precomp,
+    bool has_scales,
+    bool has_rotations,
+    bool has_cov3D_precomp,
+    torch::Tensor shs,
+    torch::Tensor colors_precomp,
+    torch::Tensor scales,
+    torch::Tensor rotations,
+    torch::Tensor cov3D_precomp)
+{
+    auto raster_settings = this->raster_settings_;
+
+    if ((!has_shs && !has_colors_precomp)
+        || (has_shs && has_colors_precomp))
+        throw std::runtime_error("Please provide exactly one of either SHs or precomputed colors!");
+
+    if (((!has_scales || !has_rotations) && !has_cov3D_precomp)
+        || ((has_scales || has_rotations) && has_cov3D_precomp))
+        throw std::runtime_error("Please provide exactly one of either scale/rotation pair or precomputed 3D covariance!");
+
+    torch::TensorOptions options;
+    if (!has_shs)
+        shs = torch::tensor({}, options.device(torch::kCUDA));
+    if (!has_colors_precomp)
+        colors_precomp = torch::tensor({}, options.device(torch::kCUDA));
+    if (!has_scales)
+        scales = torch::tensor({}, options.device(torch::kCUDA));
+    if (!has_rotations)
+        rotations = torch::tensor({}, options.device(torch::kCUDA));
+    if (!has_cov3D_precomp)
+        cov3D_precomp = torch::tensor({}, options.device(torch::kCUDA));
+
+    // Call the WithDepth variant — returns 7-tuple, last element is depth map
+    auto result = RasterizeGaussiansWithDepthCUDA(
+        raster_settings.bg_,
+        means3D,
+        colors_precomp,
+        opacities,
+        scales,
+        rotations,
+        raster_settings.scale_modifier_,
+        cov3D_precomp,
+        raster_settings.viewmatrix_,
+        raster_settings.projmatrix_,
+        raster_settings.tanfovx_,
+        raster_settings.tanfovy_,
+        raster_settings.image_height_,
+        raster_settings.image_width_,
+        shs,
+        raster_settings.sh_degree_,
+        raster_settings.campos_,
+        raster_settings.prefiltered_
+    );
+
+    // tuple: (num_rendered, color, radii, geomBuffer, binningBuffer, imgBuffer, depth)
+    auto color = std::get<1>(result);
+    auto radii  = std::get<2>(result);
+    auto depth  = std::get<6>(result);   // [1, H, W] float32, view-space Z > 0
+    return std::make_tuple(color, radii, depth);
+}
+
 torch::Tensor GaussianRasterizer::visible_filter(
     torch::Tensor means3D,
     bool has_scales,

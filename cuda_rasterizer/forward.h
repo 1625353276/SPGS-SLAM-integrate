@@ -61,6 +61,22 @@ namespace FORWARD
 		const float* bg_color,
 		float* out_color);
 
+	// Main rasterization method with depth output for AR applications.
+	void render_with_depth(
+		const dim3 grid, dim3 block,
+		const uint2* ranges,
+		const uint32_t* point_list,
+		int W, int H,
+		const float2* points_xy_image,
+		const float* features,
+		const float4* conic_opacity,
+		const float* depths,
+		float* final_T,
+		uint32_t* n_contrib,
+		const float* bg_color,
+		float* out_color,
+		float* out_depth);
+
 	void filter_preprocess(int P, int M,
 		const float* means3D,
 		const glm::vec3* scales,

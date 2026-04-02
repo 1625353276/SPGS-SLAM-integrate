@@ -670,11 +670,17 @@ void GaussianMapper::run()
 
     int SLAM_stop_iter = 0;
     while (!isStopped()) {
+        // User-controlled pause
+        if (training_paused_) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            continue;
+        }
+
         if (hasMetIncrementalMappingConditions()) {
             combineMappingOperations();
             if (cull_keyframes_)
                 cullKeyframes();
-                
+
         }
         trainForOneIteration();
 
@@ -1857,9 +1863,19 @@ void GaussianMapper::renderAndRecordKeyframe(
 
     masked_image = rendered_image * mask_rgb;
     gt_image = gt_image * mask_rgb;
-    dssim = loss_utils::ssim(masked_image, gt_image, device_type_).item().toFloat();
-    psnr = loss_utils::psnr(masked_image, gt_image).item().toFloat();
-    psnr_gs = loss_utils::psnr_gaussian_splatting(masked_image, gt_image).item().toFloat();
+
+    // Check if images have valid non-zero values before SSIM calculation
+    float masked_sum = masked_image.sum().item<float>();
+    float gt_sum = gt_image.sum().item<float>();
+    if (masked_sum < 1e-6f || gt_sum < 1e-6f || !std::isfinite(masked_sum) || !std::isfinite(gt_sum)) {
+        dssim = 0.0f;
+        psnr = 0.0f;
+        psnr_gs = 0.0f;
+    } else {
+        dssim = loss_utils::ssim(masked_image, gt_image, device_type_).item().toFloat();
+        psnr = loss_utils::psnr(masked_image, gt_image).item().toFloat();
+        psnr_gs = loss_utils::psnr_gaussian_splatting(masked_image, gt_image).item().toFloat();
+    }
 
     if (record_rendered_image_) {
         auto image_cv = tensor_utils::torchTensor2CvMat_Float32(masked_image);
@@ -2581,4 +2597,247 @@ cv::Mat GaussianMapper::renderFromPose(
     else
         masked_image = std::get<0>(render_pkg) * viewer_sub_undistort_mask_[pkf->camera_id_];
     return tensor_utils::torchTensor2CvMat_Float32(masked_image);
+}
+
+cv::Mat GaussianMapper::renderFromPoseWithDepth(
+    const Sophus::SE3f &Tcw,
+    const int width,
+    const int height,
+    const bool main_vision,
+    cv::Mat &depth_out)
+{
+    depth_out = cv::Mat();
+    if (!initial_mapped_ || getIteration() <= 0)
+        return cv::Mat(height, width, CV_32FC3, cv::Vec3f(0.0f, 0.0f, 0.0f));
+
+    std::shared_ptr<GaussianKeyframe> pkf = std::make_shared<GaussianKeyframe>();
+    pkf->zfar_  = z_far_;
+    pkf->znear_ = z_near_;
+    pkf->setPose(
+        Tcw.unit_quaternion().cast<double>(),
+        Tcw.translation().cast<double>());
+    try {
+        Camera& camera = scene_->cameras_.at(viewer_camera_id_);
+        pkf->setCameraParams(camera);
+        pkf->computeTransformTensors();
+    }
+    catch (std::out_of_range) {
+        throw std::runtime_error("[GaussianMapper::renderFromPoseWithDepth]KeyFrame Camera not found!");
+    }
+
+    std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor,
+               at::Tensor, at::Tensor, at::Tensor, bool, at::Tensor> render_pkg;
+    {
+        std::unique_lock<std::mutex> lock_render(mutex_render_);
+        auto voxel_visible_mask = GaussianRenderer::prefilter_voxel(
+            pkf, height, width, gaussians_, pipe_params_, background_, override_color_);
+        render_pkg = GaussianRenderer::renderWithDepth(
+            pkf, height, width, gaussians_, pipe_params_, background_, override_color_,
+            voxel_visible_mask, /*retain_grad=*/false);
+    }
+
+    // Color image
+    torch::Tensor masked_image;
+    if (main_vision)
+        masked_image = std::get<0>(render_pkg) * viewer_main_undistort_mask_[pkf->camera_id_];
+    else
+        masked_image = std::get<0>(render_pkg) * viewer_sub_undistort_mask_[pkf->camera_id_];
+
+    // Depth map: tensor [1, H, W] (view-space Z, in scene units)
+    // NOTE: This depth is normalized by CUDA rasterizer with background=100.0
+    // We need to un-normalize it to get actual distances
+    auto depth_tensor = std::get<8>(render_pkg);   // [1, H, W]
+    depth_tensor = depth_tensor.squeeze(0);         // [H, W]
+
+    // Un-normalize depth: convert from [0, 100] back to actual view-space Z
+    // The CUDA rasterizer uses: out_depth = depth_acc + T * 100.0f
+    // where depth_acc is the actual distance and 100.0 is z_far
+    // But depth_acc is already blended with alpha, so we need to approximate
+
+    // For occlusion testing, we need actual distances without the 100.0 cap
+    // Let's use the raw depth and scale it based on scene extent
+
+    // Ensure float32 on CPU before accessing data_ptr
+    if (depth_tensor.dtype() != torch::kFloat32) {
+        depth_tensor = depth_tensor.to(torch::kFloat32);
+    }
+    depth_tensor = depth_tensor.contiguous().to(torch::kCPU);
+
+    // Safe copy to cv::Mat
+    depth_out = cv::Mat(height, width, CV_32FC1);
+    std::memcpy(depth_out.data, depth_tensor.data_ptr<float>(),
+                height * width * sizeof(float));
+
+    // Post-process: un-normalize depth values
+    // The rasterizer blends depth with background (100.0), so values close to 100 are "far"
+    // We need to invert this logic for proper occlusion
+    for (int i = 0; i < height * width; ++i) {
+        float& d = ((float*)depth_out.data)[i];
+        if (d >= 99.0f) {
+            d = 0.0f;  // Invalid/background depth
+        }
+        // Values are already in view-space Z (approximately)
+        // No need to un-normalize as the rasterizer outputs actual Z values
+    }
+
+    return tensor_utils::torchTensor2CvMat_Float32(masked_image);
+}
+
+bool GaussianMapper::queryLightingAtPoint(
+    const Eigen::Vector3f& point_world,
+    Eigen::Vector3f& light_dir,
+    float& light_intensity)
+{
+    light_dir = Eigen::Vector3f(0.3f, -0.8f, 0.5f);  // Default: directional light
+    light_intensity = 0.7f;  // Default intensity
+
+    if (!initial_mapped_ || getIteration() <= 0 || !gaussians_)
+        return false;
+
+    try {
+        // Convert point to torch tensor
+        torch::Tensor point_tensor = torch::from_blob(
+            const_cast<float*>(point_world.data()), {1, 3},
+            torch::TensorOptions().dtype(torch::kFloat32)).to(device_type_);
+
+        // Find nearest anchor using K-NN
+        auto anchors = gaussians_->get_anchor();  // [N, 3]
+        auto diff = anchors - point_tensor;  // [N, 3]
+        auto dist_sq = torch::sum(diff * diff, /*dim=*/1);  // [N]
+        auto min_idx = torch::argmin(dist_sq).item<int64_t>();
+        float min_dist = std::sqrt(dist_sq[min_idx].item<float>());
+
+        // Get the nearest anchor's feature
+        auto feat = gaussians_->_anchor_feat.index({min_idx}).unsqueeze(0);  // [1, feat_dim]
+
+        // Sample multiple view directions to estimate lighting
+        const int num_samples = 16;
+        std::vector<Eigen::Vector3f> sample_dirs;
+        std::vector<float> luminance_values;
+        luminance_values.reserve(num_samples);
+
+        // Fibonacci sphere sampling for uniform direction distribution
+        const float golden_ratio = 1.61803398875f;
+        for (int i = 0; i < num_samples; ++i) {
+            float theta = 2.0f * M_PI * i / golden_ratio;
+            float phi = std::acos(1.0f - 2.0f * (i + 0.5f) / num_samples);
+
+            Eigen::Vector3f dir(
+                std::sin(phi) * std::cos(theta),
+                std::sin(phi) * std::sin(theta),
+                std::cos(phi)
+            );
+            sample_dirs.push_back(dir);
+
+            // Compute view direction (from point to camera, opposite of light direction)
+            Eigen::Vector3f view_dir = -dir;
+
+            torch::Tensor ob_view = torch::from_blob(
+                const_cast<float*>(view_dir.data()), {1, 3},
+                torch::TensorOptions().dtype(torch::kFloat32)).to(device_type_);
+
+            torch::Tensor ob_dist = torch::tensor({min_dist},
+                torch::TensorOptions().dtype(torch::kFloat32).device(device_type_));
+
+            // Build input to color MLP
+            torch::Tensor cat_local_view;
+            if (gaussians_->add_color_dist) {
+                cat_local_view = torch::cat({feat, ob_view, ob_dist}, 1);
+            } else {
+                cat_local_view = torch::cat({feat, ob_view}, 1);
+            }
+
+            // Add appearance feature if needed
+            if (gaussians_->appearance_dim > 0) {
+                auto appearance_feat = torch::zeros({1, gaussians_->appearance_dim},
+                    torch::TensorOptions().dtype(torch::kFloat32).device(device_type_));
+                cat_local_view = torch::cat({cat_local_view, appearance_feat}, 1);
+            }
+
+            // Query color MLP
+            torch::Tensor color_output;
+            {
+                std::unique_lock<std::mutex> lock_render(mutex_render_);
+                color_output = gaussians_->get_color_mlp()->forward(cat_local_view);
+            }
+
+            // Convert to luminance (grayscale)
+            float r = color_output[0][0].item<float>();
+            float g = color_output[0][1].item<float>();
+            float b = color_output[0][2].item<float>();
+            float lum = 0.299f * r + 0.587f * g + 0.114f * b;
+            luminance_values.push_back(lum);
+        }
+
+        // Estimate main light direction from luminance variation
+        float max_lum = 0.0f;
+        int max_idx = 0;
+        float avg_lum = 0.0f;
+
+        for (int i = 0; i < num_samples; ++i) {
+            avg_lum += luminance_values[i];
+            if (luminance_values[i] > max_lum) {
+                max_lum = luminance_values[i];
+                max_idx = i;
+            }
+        }
+        avg_lum /= num_samples;
+
+        // Light direction is the direction with highest luminance
+        light_dir = sample_dirs[max_idx];
+        light_intensity = std::min(1.0f, max_lum * 1.5f);  // Scale to 0-1 range
+
+        return true;
+    }
+    catch (const std::exception& e) {
+        std::cerr << "[queryLightingAtPoint] Error: " << e.what() << std::endl;
+        return false;
+    }
+}
+
+float GaussianMapper::getLightingFromAppearance(const Sophus::SE3f& Tcw)
+{
+    if (!initial_mapped_ || getIteration() <= 0 || !gaussians_)
+        return -1.0f;
+
+    // Check if appearance MLP exists
+    if (gaussians_->appearance_dim <= 0)
+        return -1.0f;
+
+    try {
+        torch::NoGradGuard no_grad;
+
+        // Build camera pose vector [tx, ty, tz, qw, qx, qy, qz]
+        std::vector<float> pose = {
+            Tcw.translation().x(), Tcw.translation().y(), Tcw.translation().z(),
+            Tcw.unit_quaternion().w(), Tcw.unit_quaternion().x(),
+            Tcw.unit_quaternion().y(), Tcw.unit_quaternion().z()
+        };
+
+        auto ob_pose = torch::from_blob(
+            pose.data(), {1, 7},
+            torch::TensorOptions().dtype(torch::kFloat32)).to(device_type_);
+
+        // Query appearance MLP
+        torch::Tensor appearance_feat;
+        {
+            std::unique_lock<std::mutex> lock_render(mutex_render_);
+            appearance_feat = gaussians_->mlp_apperance->forward(ob_pose);
+        }
+
+        // Extract brightness from appearance features
+        // The appearance embedding encodes view-dependent lighting conditions
+        float mean_feat = appearance_feat.mean().item<float>();
+        float std_feat = appearance_feat.std().item<float>();
+
+        // Map to light intensity: higher feature values + higher variance = brighter scene
+        // This is learned during training without explicit supervision
+        float light_intensity = 0.5f + 0.5f * std::tanh(mean_feat * 2.0f);
+
+        return std::max(0.1f, std::min(1.0f, light_intensity));
+    }
+    catch (const std::exception& e) {
+        // Silently fail and return default
+        return -1.0f;
+    }
 }

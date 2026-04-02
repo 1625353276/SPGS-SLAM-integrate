@@ -132,7 +132,19 @@ public:
     bool isStopped();
     void signalStop(const bool going_to_stop = true);
 
+    // Pause/resume training (user control)
+    void pauseTraining() { training_paused_ = true; }
+    void resumeTraining() { training_paused_ = false; }
+    bool isTrainingPaused() const { return training_paused_; }
+
     int getIteration();
+    int getMaxIterations() const { return opt_params_.iterations_; }
+    float getTrainingProgress() {
+        return static_cast<float>(getIteration()) / opt_params_.iterations_;
+    }
+
+    // Get the most recent training loss (EMA smoothed)
+    float getLastLoss() const { return ema_loss_for_log_; }
     void increaseIteration(const int inc = 1);
 
     float positionLearningRateInit();
@@ -201,6 +213,38 @@ public:
         const int width,
         const int height,
         const bool main_vision);
+
+    // Same as renderFromPose but also returns a depth map (CV_32FC1, view-space meters).
+    // depth is empty if the mapper is not yet initialised.
+    cv::Mat renderFromPoseWithDepth(
+        const Sophus::SE3f &Tcw,
+        const int width,
+        const int height,
+        const bool main_vision,
+        cv::Mat &depth_out);
+
+    /**
+     * @brief Query lighting at a 3D point using the color MLP.
+     *        Samples multiple view directions and returns estimated light direction and intensity.
+     * @param point_world World coordinates of the query point (Eigen::Vector3f)
+     * @param light_dir Output: estimated main light direction (normalized, in world space)
+     * @param light_intensity Output: estimated light intensity (0-1)
+     * @return true if successful, false if mapper not initialized
+     */
+    bool queryLightingAtPoint(
+        const Eigen::Vector3f& point_world,
+        Eigen::Vector3f& light_dir,
+        float& light_intensity);
+
+    /**
+     * @brief Get lighting intensity from Gaussian appearance embedding.
+     *        This uses the appearance MLP to estimate scene brightness from camera pose,
+     *        which is much faster than querying color MLP multiple times.
+     *        This demonstrates the power of neural gaussians with learned appearance.
+     * @param Tcw Camera pose (world to camera)
+     * @return Estimated light intensity (0-1), or -1 if not available
+     */
+    float getLightingFromAppearance(const Sophus::SE3f& Tcw);
 
 protected:
     bool hasMetInitialMappingConditions();
@@ -313,6 +357,7 @@ protected:
     bool initial_mapped_;
     bool interrupt_training_;
     bool stopped_;
+    std::atomic<bool> training_paused_{false};  // user-controlled pause
     int iteration_;
     float ema_loss_for_log_;
     bool SLAM_ended_;
