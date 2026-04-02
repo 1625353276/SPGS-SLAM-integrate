@@ -596,11 +596,19 @@ vector<KeyFrame*> System::SaveTrajectoryTUM(const string &filename)
         Sophus::SE3f Trw;
 
         // If the reference keyframe was culled, traverse the spanning tree to get a suitable keyframe.
+        if(!pKF)
+            continue;
+
         while(pKF->isBad())
         {
             Trw = Trw * pKF->mTcp;
             pKF = pKF->GetParent();
+            if(!pKF)
+                break;
         }
+
+        if(!pKF)
+            continue;
 
         Trw = Trw * pKF->GetPose() * Two;
 
@@ -731,6 +739,7 @@ void System::SaveTrajectoryEuRoC(const string &filename)
             //cout << " 2.bad" << endl;
             Trw = Trw * pKF->mTcp;
             pKF = pKF->GetParent();
+            if(!pKF) break;
             //cout << "--Parent KF: " << pKF->mnId << endl;
         }
 
@@ -836,6 +845,7 @@ void System::SaveTrajectoryEuRoC(const string &filename, Map* pMap)
             //cout << " 2.bad" << endl;
             Trw = Trw * pKF->mTcp;
             pKF = pKF->GetParent();
+            if(!pKF) break;
             //cout << "--Parent KF: " << pKF->mnId << endl;
         }
 
@@ -951,6 +961,7 @@ void System::SaveTrajectoryEuRoC(const string &filename, Map* pMap)
             //cout << " 2.bad" << endl;
             Trw = Trw * pKF->mTcp;
             pKF = pKF->GetParent();
+            if(!pKF) break;
             //cout << "--Parent KF: " << pKF->mnId << endl;
         }
 
@@ -1176,11 +1187,18 @@ void System::SaveKeyFrameTrajectoryEuRoC(const string &filename, Map* pMap)
 
         cv::Mat Trw = cv::Mat::eye(4,4,CV_32F);
 
+        if(!pKF)
+            continue;
+
         while(pKF->isBad())
         {
             Trw = Trw * Converter::toCvMat(pKF->mTcp.matrix());
             pKF = pKF->GetParent();
+            if(!pKF) break;
         }
+
+        if(!pKF)
+            continue;
 
         Trw = Trw * pKF->GetPoseCv() * Two;
 
@@ -1205,6 +1223,11 @@ void System::SaveTrajectoryKITTI(const string &filename)
     // }
 
     vector<KeyFrame*> vpKFs = mpAtlas->GetAllKeyFrames();
+    if(vpKFs.empty())
+    {
+        cerr << "ERROR: No keyframes to save!" << endl;
+        return;
+    }
     sort(vpKFs.begin(),vpKFs.end(),KeyFrame::lId);
 
     // Transform all keyframes so that the first keyframe is at the origin.
@@ -1237,7 +1260,11 @@ void System::SaveTrajectoryKITTI(const string &filename)
         {
             Trw = Trw * pKF->mTcp;
             pKF = pKF->GetParent();
+            if(!pKF) break;
         }
+
+        if(!pKF)
+            continue;
 
         Trw = Trw * pKF->GetPose() * Tow;
 
