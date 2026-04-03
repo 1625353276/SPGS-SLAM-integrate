@@ -280,7 +280,7 @@ void SuperPointOnnxRunner::Extractor_PostProcess(Configuration cfg , std::vector
         Descriptors = mat1;
 
 
-        //std::cout << "[INFO] Extractor postprocessing operation completed successfully" << std::endl;
+        std::cout << "[SP] Keypoints detected: " << (int)vKeyPoints.size() << std::endl;
     }
     catch(const std::exception& ex)
     {

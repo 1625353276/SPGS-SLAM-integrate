@@ -304,6 +304,8 @@ void GaussianMapper::readConfigFromFile(std::filesystem::path cfg_path)
         settings_file["Mapper.local_BA_increased_times_of_use"].operator int();
     loop_closure_increased_times_of_use_ = 
         settings_file["Mapper.loop_closure_increased_times_of_use_"].operator int();
+    max_keyframe_times_of_use_ = 
+        settings_file["Mapper.max_keyframe_times_of_use"].operator int();
     cull_keyframes_ =
         (settings_file["Mapper.cull_keyframes"].operator int()) != 0;
     large_rot_th_ =
@@ -770,7 +772,8 @@ void GaussianMapper::run()
                 break;
         }
 
-        if (getIteration() >= opt_params_.iterations_)
+        // 0 或负数表示无上限（实时模式）
+        if (opt_params_.iterations_ > 0 && getIteration() >= opt_params_.iterations_)
             break;
     }
 
@@ -815,7 +818,8 @@ void GaussianMapper::trainColmap()
     while (!isStopped()) {
         trainForOneIteration();
 
-        if (getIteration() >= opt_params_.iterations_)
+        // 0 或负数表示无上限（实时模式）
+        if (opt_params_.iterations_ > 0 && getIteration() >= opt_params_.iterations_)
             break;
     }
 
@@ -991,36 +995,45 @@ void GaussianMapper::trainForOneIteration()
         elapsed_time_from_start = elapsed_time_from_start + iter_time;
         if (getIteration() % 10 == 0)
         {
-            int bar_width = 10;
-            float progress = (float)getIteration() / opt_params_.iterations_;
-
-            float estimated_total_time = elapsed_time_from_start / progress;
-            float remaining_seconds = estimated_total_time - elapsed_time_from_start;
-
             int elapsed_minutes = static_cast<int>(elapsed_time_from_start / 1000.0) / 60;
             int elapsed_seconds_display = static_cast<int>(elapsed_time_from_start / 1000.0) % 60;
 
-            int remaining_minutes = static_cast<int>(remaining_seconds / 1000.0) / 60;
-            int remaining_seconds_display = static_cast<int>(remaining_seconds / 1000.0) % 60;
+            // 无上限模式（实时）vs 有上限模式
+            if (opt_params_.iterations_ > 0) {
+                float progress = (float)getIteration() / opt_params_.iterations_;
+                float estimated_total_time = elapsed_time_from_start / progress;
+                float remaining_seconds = estimated_total_time - elapsed_time_from_start;
+                int remaining_minutes = static_cast<int>(remaining_seconds / 1000.0) / 60;
+                int remaining_seconds_display = static_cast<int>(remaining_seconds / 1000.0) % 60;
 
-            std::cout << "\033[1;34mTrain:\033[0m[";
-            int pos = bar_width * progress;
-            for (int i = 0; i < bar_width; ++i) {
-                if (i < pos) std::cout << "=";
-                else if (i == pos) std::cout << ">";
-                else std::cout << " ";
-            }
-            std::cout << "]" << int(progress * 100.0) << "% [" << getIteration() << "/" << opt_params_.iterations_
-                      << ", L=" << std::fixed << std::setprecision(4) << ema_loss_for_log_
-                      << ", " << std::setfill('0') << std::setw(2) << elapsed_minutes << ":" << std::setw(2) << elapsed_seconds_display
-                      << "<" << std::setfill('0') << std::setw(2) << remaining_minutes << ":" << std::setw(2) << remaining_seconds_display
-                      << " " << std::setfill('0') << std::setw(2) << iter_time << "ms"
-                      << " FL=" <<  freq_loss.item().toFloat() 
-                      <<"/" << freq_loss_low.item().toFloat() << "]"
-                      << "\r";
-
-            if (getIteration() < opt_params_.iterations_)
+                int bar_width = 10;
+                std::cout << "\033[1;34mTrain:\033[0m[";
+                int pos = bar_width * progress;
+                for (int i = 0; i < bar_width; ++i) {
+                    if (i < pos) std::cout << "=";
+                    else if (i == pos) std::cout << ">";
+                    else std::cout << " ";
+                }
+                std::cout << "]" << int(progress * 100.0) << "% [" << getIteration() << "/" << opt_params_.iterations_
+                          << ", L=" << std::fixed << std::setprecision(4) << ema_loss_for_log_
+                          << ", " << std::setfill('0') << std::setw(2) << elapsed_minutes << ":" << std::setw(2) << elapsed_seconds_display
+                          << "<" << std::setfill('0') << std::setw(2) << remaining_minutes << ":" << std::setw(2) << remaining_seconds_display
+                          << " " << std::setfill('0') << std::setw(2) << iter_time << "ms"
+                          << " FL=" <<  freq_loss.item().toFloat()
+                          <<"/" << freq_loss_low.item().toFloat() << "]"
+                          << "\r";
                 std::cout.flush();
+            } else {
+                // 实时模式：无进度条，只显示迭代次数
+                std::cout << "\033[1;34mTrain:\033[0m [" << getIteration()
+                          << ", L=" << std::fixed << std::setprecision(4) << ema_loss_for_log_
+                          << ", " << std::setfill('0') << std::setw(2) << elapsed_minutes << ":" << std::setw(2) << elapsed_seconds_display
+                          << " " << std::setfill('0') << std::setw(2) << iter_time << "ms"
+                          << " FL=" <<  freq_loss.item().toFloat()
+                          <<"/" << freq_loss_low.item().toFloat() << "]"
+                          << "\r";
+                std::cout.flush();
+            }
         }
         if ((all_keyframes_record_interval_ && getIteration() % all_keyframes_record_interval_ == 0)
             )
@@ -1031,7 +1044,8 @@ void GaussianMapper::trainForOneIteration()
         if (loop_closure_iteration_)
             loop_closure_iteration_ = false;
 
-        if (getIteration() < opt_params_.iterations_) {
+        // 无上限模式（实时）始终执行优化，有上限模式检查是否达到上限
+        if (opt_params_.iterations_ <= 0 || getIteration() < opt_params_.iterations_) {
             gaussians_->optimizer_->step();
             gaussians_->optimizer_->zero_grad(true);
         }
@@ -1570,6 +1584,15 @@ void GaussianMapper::increaseKeyframeTimesOfUse(
     std::shared_ptr<GaussianKeyframe> pkf,
     int times)
 {
+    // 限制最高训练次数上限
+    if (max_keyframe_times_of_use_ > 0) {
+        auto fid = pkf->fid_;
+        int current_used = (kfs_used_times_.find(fid) != kfs_used_times_.end()) 
+                           ? kfs_used_times_[fid] : 0;
+        int remaining_allowed = max_keyframe_times_of_use_ - current_used;
+        if (remaining_allowed <= 0) return;  // 已达上限
+        times = std::min(times, remaining_allowed);
+    }
     pkf->remaining_times_of_use_ += times;
 }
 

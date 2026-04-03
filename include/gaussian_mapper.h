@@ -140,6 +140,7 @@ public:
     int getIteration();
     int getMaxIterations() const { return opt_params_.iterations_; }
     float getTrainingProgress() {
+        if (opt_params_.iterations_ <= 0) return -1.0f;  // 实时模式，无进度
         return static_cast<float>(getIteration()) / opt_params_.iterations_;
     }
 
@@ -390,6 +391,7 @@ protected:
     int new_keyframe_times_of_use_;
     int local_BA_increased_times_of_use_;
     int loop_closure_increased_times_of_use_;
+    int max_keyframe_times_of_use_;  // 每个关键帧最高训练次数上限
 
     bool cull_keyframes_;
     int stable_num_iter_existence_;

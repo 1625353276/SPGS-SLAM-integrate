@@ -491,14 +491,19 @@ void ARViewer::run()
             float loss = pGausMapper_->getLastLoss();
             bool paused = pGausMapper_->isTrainingPaused();
 
-            // Progress bar
+            // Progress bar (only for offline mode)
             float progress = pGausMapper_->getTrainingProgress();
-            std::string progress_str = std::to_string(int(progress * 100)) + "%";
-            ImGui::Text("Gaussian Training:");
-            ImGui::ProgressBar(progress, ImVec2(-1, 0), progress_str.c_str());
-
-            // Iteration & loss
-            ImGui::Text("Iter: %d / %d   Loss: %.4f", itr, max_itr, loss);
+            if (progress < 0) {
+                // Live mode: no progress bar, just iteration count
+                ImGui::Text("Gaussian Training (Live):");
+                ImGui::Text("Iter: %d   Loss: %.4f", itr, loss);
+            } else {
+                // Offline mode: show progress bar
+                std::string progress_str = std::to_string(int(progress * 100)) + "%";
+                ImGui::Text("Gaussian Training:");
+                ImGui::ProgressBar(progress, ImVec2(-1, 0), progress_str.c_str());
+                ImGui::Text("Iter: %d / %d   Loss: %.4f", itr, max_itr, loss);
+            }
 
             // Pause/Resume button
             if (paused) {

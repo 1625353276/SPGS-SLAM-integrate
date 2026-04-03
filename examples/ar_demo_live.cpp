@@ -2,15 +2,17 @@
  * AR Demo — Live Webcam (Monocular)
  *
  * Usage:
- *   ./ar_demo_live vocab.bin settings.yaml [camera_id]
+ *   ./ar_demo_live vocab.bin settings.yaml [gaussian_cfg] [camera_id] [output_dir]
  *
- *   vocab     — ORB vocabulary (ORBvoc.bin)
- *   settings  — monocular camera yaml (e.g. cfg/ORB_SLAM3/Monocular/RealCamera/webcam_640x480.yaml)
- *   camera_id — OpenCV camera index (default: 0)
+ *   vocab        — ORB vocabulary (ORBvoc.bin)
+ *   settings     — monocular camera yaml (e.g. cfg/ORB_SLAM3/Monocular/RealCamera/webcam_640x480.yaml)
+ *   gaussian_cfg — (optional) Gaussian mapper config to enable 3D reconstruction
+ *   camera_id    — OpenCV camera index (default: 0)
+ *   output_dir   — output directory for Gaussian model (default: ./output/ar_live_output)
  *
- * Rendering pipeline (same as AR_course Ubuntu):
- *   1. Background = raw camera frame
- *   2. Foreground = SpongeBob .obj rendered with SLAM pose
+ * Rendering pipeline:
+ *   1. Background = raw camera frame (or Gaussian render if mapper is ready)
+ *   2. Foreground = .obj model rendered with SLAM pose
  */
 
 #include <iostream>
@@ -19,11 +21,14 @@
 #include <chrono>
 #include <memory>
 #include <cstdlib>
+#include <filesystem>
 
 #include <opencv2/opencv.hpp>
+#include <torch/torch.h>
 
 #include "include/ar_viewer.h"
 #include "ORB-SLAM3/include/System.h"
+#include "include/gaussian_mapper.h"
 
 using namespace std;
 using namespace SPGS;
@@ -32,18 +37,55 @@ int main(int argc, char** argv)
 {
     if (argc < 3) {
         cout << "Usage: " << argv[0]
-             << " vocab settings [camera_id]" << endl;
-        cout << "Example:" << endl;
+             << " vocab settings [gaussian_cfg] [camera_id] [output_dir]" << endl;
+        cout << endl;
+        cout << "Examples:" << endl;
+        cout << "  # SLAM only (no Gaussian)" << endl;
         cout << "  " << argv[0]
-             << " ORB-SLAM3/Vocabulary/ORBvoc.bin"
-                " cfg/ORB_SLAM3/Monocular/RealCamera/webcam_640x480.yaml"
+             << " ORB-SLAM3/Vocabulary/SPvoc.bin"
+                " cfg/ORB_SLAM3/Monocular/RealCamera/hd_camera_1280x720.yaml"
                 " 0" << endl;
+        cout << endl;
+        cout << "  # With Gaussian reconstruction" << endl;
+        cout << "  " << argv[0]
+             << " ORB-SLAM3/Vocabulary/SPvoc.bin"
+                " cfg/ORB_SLAM3/Monocular/RealCamera/hd_camera_1280x720.yaml"
+                " cfg/gaussian_mapper/Monocular/RealCamera/webcam.yaml"
+                " 0 ./output/ar_live_output" << endl;
         return 1;
     }
 
     const string vocab    = argv[1];
     const string settings = argv[2];
-    const int    cam_id   = (argc > 3) ? atoi(argv[3]) : 0;
+
+    // Parse optional arguments
+    // Layout: vocab settings [gaussian_cfg] [camera_id] [output_dir]
+    string gaussian_cfg_str;
+    int    cam_id         = 0;
+    string output_dir_str = "./output/ar_live_output";
+    bool   use_gaussian   = false;
+
+    // Detect if argv[3] is gaussian_cfg (ends with .yaml) or camera_id
+    if (argc >= 4) {
+        string arg3 = argv[3];
+        if (arg3.size() > 5 && arg3.substr(arg3.size() - 5) == ".yaml") {
+            // argv[3] is gaussian_cfg
+            gaussian_cfg_str = arg3;
+            use_gaussian     = true;
+            if (argc >= 5) cam_id = atoi(argv[4]);
+            if (argc >= 6) output_dir_str = argv[5];
+        } else {
+            // argv[3] is camera_id
+            cam_id = atoi(arg3.c_str());
+            if (argc >= 5) output_dir_str = argv[4];
+        }
+    }
+
+    if (use_gaussian)
+        cout << "GaussianMapper ENABLED: " << gaussian_cfg_str << "\n"
+             << "Output dir: " << output_dir_str << endl;
+    else
+        cout << "GaussianMapper DISABLED (pass gaussian_cfg as argv[3] to enable)" << endl;
 
     // ----------------------------------------------------------------
     // Read camera intrinsics from settings file
@@ -89,10 +131,39 @@ int main(int argc, char** argv)
         vocab, settings, ORB_SLAM3::System::MONOCULAR, /*viewer=*/false);
 
     // ----------------------------------------------------------------
+    // Init GaussianMapper (optional — requires GPU and gaussian cfg)
+    // ----------------------------------------------------------------
+    shared_ptr<GaussianMapper> pGausMapper;
+    thread training_thd;
+
+    if (use_gaussian) {
+        // Detect device
+        torch::DeviceType device_type = torch::cuda::is_available()
+            ? torch::kCUDA : torch::kCPU;
+        cout << (device_type == torch::kCUDA
+            ? "CUDA available — GaussianMapper on GPU"
+            : "Warning: CUDA not found — GaussianMapper on CPU (slow)") << endl;
+
+        filesystem::path gauss_cfg(gaussian_cfg_str);
+        filesystem::path out_dir(output_dir_str);
+        if (!out_dir.empty() && !filesystem::exists(out_dir))
+            filesystem::create_directories(out_dir);
+
+        pGausMapper = make_shared<GaussianMapper>(
+            pSLAM, gauss_cfg, out_dir, /*seed=*/0, device_type);
+        training_thd = thread(&GaussianMapper::run, pGausMapper.get());
+        cout << "GaussianMapper training thread started." << endl;
+    }
+
+    // ----------------------------------------------------------------
     // Init AR Viewer
     // ----------------------------------------------------------------
     cout << "Initializing AR Viewer..." << endl;
     ARViewer viewer(pSLAM, W, H, fx, fy, cx, cy);
+
+    // Pass GaussianMapper pointer to viewer (nullptr if disabled)
+    if (pGausMapper)
+        viewer.setGaussianMapper(pGausMapper);
 
     // Scan for available models
     viewer.scanModelsDirectory("models");
@@ -228,9 +299,17 @@ int main(int argc, char** argv)
 
     cout << "\nStopping..." << endl;
 
+    // Signal GaussianMapper to stop before SLAM shutdown
+    if (pGausMapper)
+        pGausMapper->signalStop();
+
     viewer.stop();
     pSLAM->Shutdown();
     cap.release();
+
+    // Wait for training thread
+    if (training_thd.joinable())
+        training_thd.join();
 
     // Use _Exit to avoid LLVM/PyTorch atexit crash (known issue)
     std::_Exit(0);
