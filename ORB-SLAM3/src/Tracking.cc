@@ -3329,16 +3329,16 @@ bool Tracking::NeedNewKeyFrame()
     if ((mSensor == System::RGBD && this->mImGray.size[0] == 680 && this->mImGray.size[1] == 1200) ||
         mSensor==System::STEREO) // replica
     {
-        thRefRatio = 0.98f;  // Raised to 0.98 to trigger c2 condition more easily
+        thRefRatio = 0.9f;  // Set to 0.9 for testing
         mMaxFrames_temp = mMaxFrames;
-        mMaxFrames = 5;  // Reduced to 5 for more frequent keyframe checks
+        mMaxFrames = 15;  // Set to 15 for testing
     }
     if ((mSensor == System::RGBD && this->mImGray.size[0] == 480 && this->mImGray.size[1] == 640) ||
         mSensor==System::STEREO) // Scannet
     {
-        thRefRatio = 0.98f;  // Raised to 0.98 to trigger c2 condition more easily
+        thRefRatio = 0.9f;  // Set to 0.9 for testing
         mMaxFrames_temp = mMaxFrames;
-        mMaxFrames = 5;  // Reduced to 5 for more frequent keyframe checks
+        mMaxFrames = 15;  // Set to 15 for testing
     }
 
     if((mSensor == System::MONOCULAR && this->mImGray.size[0] == 680 && this->mImGray.size[1] == 1200))

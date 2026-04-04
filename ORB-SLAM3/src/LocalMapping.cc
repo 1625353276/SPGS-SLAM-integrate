@@ -124,6 +124,10 @@ void LocalMapping::Run()
 
             if(!CheckNewKeyFrames() && !stopRequested())
             {
+                // Check redundant local Keyframes BEFORE Local BA
+                // This ensures culled keyframes are not passed to Gaussian Mapper
+                KeyFrameCulling();
+
                 if(mpAtlas->KeyFramesInMap()>2)
                 {
 
@@ -192,16 +196,7 @@ void LocalMapping::Run()
                         InitializeIMU(1e2, 1e5, true);
                 }
 
-
-                // Check redundant local Keyframes
-                KeyFrameCulling();
-
-#ifdef REGISTER_TIMES
-                std::chrono::steady_clock::time_point time_EndKFCulling = std::chrono::steady_clock::now();
-
-                timeKFCulling_ms = std::chrono::duration_cast<std::chrono::duration<double,std::milli> >(time_EndKFCulling - time_EndLBA).count();
-                vdKFCulling_ms.push_back(timeKFCulling_ms);
-#endif
+                // KeyFrameCulling moved BEFORE Local BA to prevent passing culled KFs to Gaussian Mapper
 
                 if ((mTinit<50.0f) && mbInertial)
                 {
