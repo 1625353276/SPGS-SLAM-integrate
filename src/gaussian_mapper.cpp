@@ -1154,6 +1154,11 @@ void GaussianMapper::combineMappingOperations()
                 std::unique_lock<std::mutex> lock_render(mutex_render_);
                 gaussians_->increasePcd(points, colors, getIteration());
             }
+            // Note: syncMissingKeyframesFromSLAM() is disabled because:
+            // 1. SEGS original design does NOT sync missing keyframes
+            // 2. KeyFrameCulling is now AFTER Local BA, so optimized keyframes are passed first
+            // 3. "Redundant" keyframes for SLAM are still useful for Gaussian rendering
+            // syncMissingKeyframesFromSLAM();
         }
         break;
 
@@ -1585,6 +1590,112 @@ void GaussianMapper::cullKeyframes()
         scene_->keyframes().erase(kfid);
     }
 }
+
+void GaussianMapper::syncMissingKeyframesFromSLAM()
+{
+    if (!initial_mapped_) return;
+    
+    auto pMap = pSLAM_->getAtlas()->GetCurrentMap();
+    std::vector<ORB_SLAM3::KeyFrame*> vpKFs;
+    {
+        std::unique_lock<std::mutex> lock_map(pMap->mMutexMapUpdate);
+        vpKFs = pMap->GetAllKeyFrames();
+    }
+    
+    // Get existing Gaussian keyframe IDs
+    std::unordered_set<unsigned long> existing_kfids;
+    for (auto& kfit : scene_->keyframes()) {
+        existing_kfids.insert(kfit.second->fid_);
+    }
+    
+    int added_count = 0;
+    for (const auto& pKF : vpKFs) {
+        // Skip if already exists
+        if (existing_kfids.find(pKF->mnId) != existing_kfids.end()) {
+            continue;
+        }
+        
+        // Skip bad keyframes
+        if (pKF->isBad()) continue;
+        
+        // Add missing keyframe
+        std::shared_ptr<GaussianKeyframe> new_kf = std::make_shared<GaussianKeyframe>(pKF->mnId, getIteration());
+        new_kf->zfar_ = z_far_;
+        new_kf->znear_ = z_near_;
+        new_kf->frameID = pKF->frameID;
+        new_kf->TimeStamp = pKF->mTimeStamp;
+        auto pose = pKF->GetPose();
+        new_kf->setPose(
+            pose.unit_quaternion().cast<double>(),
+            pose.translation().cast<double>());
+        
+        cv::Mat imgRGB_undistorted, imgAux_undistorted;
+        try {
+            if (use_undistorted_image) {
+                Camera& camera = scene_->cameras_.at(pKF->mpCamera->GetId());
+                imgRGB_undistorted = pKF->undistortedRGB;
+                cv::Mat imgAux = pKF->imgAuxiliary;
+                if (this->sensor_type_ == RGBD)
+                    camera.undistortImage(imgAux, imgAux_undistorted);
+                else
+                    imgAux_undistorted = imgAux;
+                
+                new_kf->setCameraParams(camera, imgRGB_undistorted.size);
+                new_kf->original_image_ =
+                    tensor_utils::cvMat2TorchTensor_Float32(imgRGB_undistorted, device_type_);
+                new_kf->img_filename_ = pKF->mNameFile;
+                new_kf->gaus_pyramid_height_ = camera.gaus_pyramid_height_;
+                new_kf->gaus_pyramid_width_ = camera.gaus_pyramid_width_;
+                new_kf->gaus_pyramid_times_of_use_ = kf_gaus_pyramid_times_of_use_;
+            }
+            else {
+                Camera& camera = scene_->cameras_.at(pKF->mpCamera->GetId());
+                new_kf->setCameraParams(camera);
+                
+                cv::Mat imgRGB = pKF->imgLeftRGB;
+                if (this->sensor_type_ == STEREO)
+                    imgRGB_undistorted = imgRGB;
+                else
+                    camera.undistortImage(imgRGB, imgRGB_undistorted);
+                cv::Mat imgAux = pKF->imgAuxiliary;
+                if (this->sensor_type_ == RGBD)
+                    camera.undistortImage(imgAux, imgAux_undistorted);
+                else
+                    imgAux_undistorted = imgAux;
+                
+                new_kf->original_image_ =
+                    tensor_utils::cvMat2TorchTensor_Float32(imgRGB_undistorted, device_type_);
+                new_kf->img_filename_ = pKF->mNameFile;
+                new_kf->gaus_pyramid_height_ = camera.gaus_pyramid_height_;
+                new_kf->gaus_pyramid_width_ = camera.gaus_pyramid_width_;
+                new_kf->gaus_pyramid_times_of_use_ = kf_gaus_pyramid_times_of_use_;
+            }
+        }
+        catch (std::out_of_range) {
+            std::cout << "[GaussianMapper::syncMissingKeyframesFromSLAM] KeyFrame Camera not found, skipping KF " << pKF->mnId << std::endl;
+            continue;
+        }
+        
+        new_kf->computeTransformTensors();
+        scene_->addKeyframe(new_kf, &kfid_shuffled_);
+        increaseKeyframeTimesOfUse(new_kf, newKeyframeTimesOfUse());
+        
+        std::vector<float> pixels;
+        std::vector<float> pointsLocal;
+        pKF->GetKeypointInfo(pixels, pointsLocal);
+        new_kf->kps_pixel_ = std::move(pixels);
+        new_kf->kps_point_local_ = std::move(pointsLocal);
+        new_kf->img_undist_ = imgRGB_undistorted;
+        new_kf->img_auxiliary_undist_ = imgAux_undistorted;
+        
+        added_count++;
+    }
+    
+    if (added_count > 0) {
+        std::cout << "[GaussianMapper::syncMissingKeyframesFromSLAM] Added " << added_count << " missing keyframes" << std::endl;
+    }
+}
+
 void GaussianMapper::increasePcdByKeyframeInactiveGeoDensify(
     std::shared_ptr<GaussianKeyframe> pkf)
 {

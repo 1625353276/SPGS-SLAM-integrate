@@ -245,6 +245,7 @@ protected:
     std::shared_ptr<GaussianKeyframe> useOneRandomKeyframe();
     void increaseKeyframeTimesOfUse(std::shared_ptr<GaussianKeyframe> pkf, int times);
     void cullKeyframes();
+    void syncMissingKeyframesFromSLAM();
 
     void increasePcdByKeyframeInactiveGeoDensify(
         std::shared_ptr<GaussianKeyframe> pkf);

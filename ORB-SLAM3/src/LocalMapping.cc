@@ -124,10 +124,6 @@ void LocalMapping::Run()
 
             if(!CheckNewKeyFrames() && !stopRequested())
             {
-                // Check redundant local Keyframes BEFORE Local BA
-                // This ensures culled keyframes are not passed to Gaussian Mapper
-                KeyFrameCulling();
-
                 if(mpAtlas->KeyFramesInMap()>2)
                 {
 
@@ -140,15 +136,14 @@ void LocalMapping::Run()
                             mTinit += mpCurrentKeyFrame->mTimeStamp - mpCurrentKeyFrame->mPrevKF->mTimeStamp;
                         if(!mpCurrentKeyFrame->GetMap()->GetIniertialBA2())
                         {
-                            // Commented out to allow IMU initialization even with little motion
-                            // if((mTinit<10.f) && (dist<0.02))
-                            // {
-                            //     cout << "Not enough motion for initializing. Reseting..." << endl;
-                            //     unique_lock<mutex> lock(mMutexReset);
-                            //     mbResetRequestedActiveMap = true;
-                            //     mpMapToReset = mpCurrentKeyFrame->GetMap();
-                            //     mbBadImu = true;
-                            // }
+                            if((mTinit<10.f) && (dist<0.02))
+                            {
+                                cout << "Not enough motion for initializing. Reseting..." << endl;
+                                unique_lock<mutex> lock(mMutexReset);
+                                mbResetRequestedActiveMap = true;
+                                mpMapToReset = mpCurrentKeyFrame->GetMap();
+                                mbBadImu = true;
+                            }
                         }
 
                         bool bLarge = ((mpTracker->GetMatchesInliers()>75)&&mbMonocular)||((mpTracker->GetMatchesInliers()>100)&&!mbMonocular);
@@ -187,6 +182,10 @@ void LocalMapping::Run()
 
 #endif
 
+                // Check redundant local Keyframes
+                // KeyFrameCulling AFTER Local BA to ensure all optimized keyframes are passed to Gaussian Mapper
+                KeyFrameCulling();
+
                 // Initialize IMU here
                 if(!mpCurrentKeyFrame->GetMap()->isImuInitialized() && mbInertial)
                 {
@@ -195,8 +194,6 @@ void LocalMapping::Run()
                     else
                         InitializeIMU(1e2, 1e5, true);
                 }
-
-                // KeyFrameCulling moved BEFORE Local BA to prevent passing culled KFs to Gaussian Mapper
 
                 if ((mTinit<50.0f) && mbInertial)
                 {
@@ -273,6 +270,7 @@ void LocalMapping::Run()
         // Tracking will see that Local Mapping is busy
         SetAcceptKeyFrames(true);
 
+        // Check if finish is requested
         if(CheckFinish())
             break;
 

@@ -311,6 +311,7 @@ int main(int argc, char **argv)
 
 
         std::size_t nkfs = pGausMapper->scene_->keyframes().size();
+        std::cout << "[INFO] Gaussian keyframes count: " << nkfs << std::endl;
         auto kfit = pGausMapper->scene_->keyframes().begin();
         std::deque<unsigned long> vec_kfID(nkfs, 0);
         std::deque<Sophus::SE3d> vec_kfPose(nkfs);
@@ -327,6 +328,11 @@ int main(int argc, char **argv)
                      << trans(0) << " " << trans(1) << " " << trans(2) << " " << rot.x() << " " << rot.y() << " " << rot.z() << " " << rot.w() << std::endl;
             ++kfit;
         }
+
+        // Print SLAM keyframes count for comparison
+        auto allkeyframes = pGausMapper->pSLAM_->getAtlas()->GetAllKeyFrames();
+        std::cout << "[INFO] SLAM keyframes count: " << allkeyframes.size() << std::endl;
+
         // std::cout << "X0 " << std::endl;
 
         // auto vpFs = pSLAM_->GetAllFrames();
