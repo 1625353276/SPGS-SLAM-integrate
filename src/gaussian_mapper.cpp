@@ -557,8 +557,13 @@ void GaussianMapper::run()
                         pose.translation().cast<double>());
                     cv::Mat imgRGB_undistorted, imgAux_undistorted;
                     try {
+                        // Check for null camera pointer to prevent segfault
+                        if(!pKF->mpCamera) {
+                            std::cout << "[GaussianMapper::run] KeyFrame " << pKF->mnId << " has null mpCamera, skipping" << std::endl;
+                            continue;
+                        }
                         if(use_undistorted_image)
-                        {  
+                        {
                             Camera& camera = scene_->cameras_.at(pKF->mpCamera->GetId());
                             imgRGB_undistorted = pKF->undistortedRGB;
                             cv::Mat imgAux = pKF->imgAuxiliary;
