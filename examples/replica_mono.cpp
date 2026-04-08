@@ -251,6 +251,7 @@ int main(int argc, char **argv)
         out_kf << "##[Gaussian Mapper]traj in Tum" << std::endl;
 
         std::size_t nkfs = pGausMapper->scene_->keyframes().size();
+        std::cout << "[INFO] Gaussian keyframes count: " << nkfs << std::endl;
         auto kfit = pGausMapper->scene_->keyframes().begin();
         std::deque<unsigned long> vec_kfID(nkfs, 0);
         std::deque<Sophus::SE3d> vec_kfPose(nkfs);
@@ -272,22 +273,30 @@ int main(int argc, char **argv)
         // LoadTrajectory((output_dir / "CameraTrajectory_TUM.txt").string(), Traj);
         example_utils::LoadTrajectory((output_dir / "CameraTrajectory_TUM_bf.txt").string(), Traj);
 
+        // Check if trajectory is empty (e.g., SLAM tracking failed)
+        if (Traj.empty()) {
+            std::cerr << "[WARNING] Trajectory file is empty, skipping evaluation." << std::endl;
+            std::cerr << "This usually means SLAM tracking failed. Check the log for 'Fail to track local map!' messages." << std::endl;
+            return 0;
+        }
+        std::cout << "[INFO] Loaded " << Traj.size() << " trajectory entries" << std::endl;
+
+        // Print SLAM keyframes count for comparison
+        auto allkeyframes = pGausMapper->pSLAM_->getAtlas()->GetAllKeyFrames();
+        std::cout << "[INFO] SLAM keyframes count: " << allkeyframes.size() << std::endl;
+
         // auto vpFs = pSLAM_->GetAllFrames();
         // auto vpFs = pSLAM_->GetAllFramesPose();
         // auto vpAllFs = pSLAM_->GetAllFramesPose();
-        auto allkeyframes = pGausMapper->pSLAM_->getAtlas()->GetAllKeyFrames();
-        std::deque<unsigned long> vec_allkeyframesID(nkfs, 0);
-        std::deque<Sophus::SE3f> vec_allkeyframesPose(nkfs);   
-        for (std::size_t i = 0; i < allkeyframes.size(); ++i) {
-            vec_allkeyframesID[i] = allkeyframes[i]->frameID;
-            vec_allkeyframesPose[i] = allkeyframes[i]->GetPose();
-
-            // auto trans = (*kfit).second->getPose().inverse().translation().cast<double>();
-            // auto rot = (*kfit).second->getPose().inverse().unit_quaternion().cast<double>();
-            // out_kf << setprecision(6) << (*kfit).second->TimeStamp << " " << setprecision(9)
-            //          << trans(0) << " " << trans(1) << " " << trans(2) << " " << rot.x() << " " << rot.y() << " " << rot.z() << " " << rot.w() << std::endl;
-            // ++kfit;
-        }   
+        // auto allkeyframes = pGausMapper->pSLAM_->getAtlas()->GetAllKeyFrames();  // unused
+        // // Build SLAM keyframe lookup: unused - only for debug comparison
+        // std::size_t allkf_count = std::min(nkfs, allkeyframes.size());
+        // std::deque<unsigned long> vec_allkeyframesID(allkf_count, 0);
+        // std::deque<Sophus::SE3f> vec_allkeyframesPose(allkf_count);
+        // for (std::size_t i = 0; i < allkf_count; ++i) {
+        //     vec_allkeyframesID[i] = allkeyframes[i]->frameID;
+        //     vec_allkeyframesPose[i] = allkeyframes[i]->GetPose();
+        // }   
 
         pGausMapper->gaussians_->eval();
         float dssim, psnr, psnr_gs;
@@ -298,10 +307,12 @@ int main(int argc, char **argv)
         double render_time;
         int idx, idx_scaffold;
         idx_scaffold = 0;
-        unsigned long keyframe_id = vec_kfID.front();
+        unsigned long keyframe_id = 0;
+        if (!vec_kfID.empty())
+            keyframe_id = vec_kfID.front();
         int img_id = int(Traj[0][0]);
 
-        while(Traj[0][0] > vec_kfID.front())
+        while(!vec_kfID.empty() && Traj[0][0] > vec_kfID.front())
         {
             vec_kfID.pop_front();
             vec_kfPose.pop_front();
@@ -384,18 +395,15 @@ int main(int argc, char **argv)
             //     new_kf->fid_ = pGausMapper->scene_->keyframes().size() - 1;
             // For test-set visualizations, we choose index to best fit a target image (e.g. Figure 8) or set it to an arbitrary value
 
-            for (std::size_t j = 0; j < allkeyframes.size(); ++j) {
-                if (idx == vec_allkeyframesID[j])
-                {
-                    auto kfPose = vec_allkeyframesPose[j];
-                    Eigen::Vector3d twc_kf = kfPose.translation().cast<double>();
-                    auto q_kf = kfPose.unit_quaternion().cast<double>();
-
-                    // std::cout << setprecision(6) << Traj[idx][0] << " " << setprecision(9)
-                    //         << c2w_t(0) - twc_kf(0) << " " << c2w_t(1) - twc_kf(1) << " " << c2w_t(2) - twc_kf(2) << " " << c2w_q.x() - q_kf.x() << std::endl
-                    //         << " " << c2w_q.y() - q_kf.y() << " " << c2w_q.z() - q_kf.z() << " " << c2w_q.w() - q_kf.w() << std::endl;
-                }//完全一样
-            }
+            // // Unused: compare pose with SLAM keyframes (debug only)
+            // for (std::size_t j = 0; j < allkf_count; ++j) {
+            //     if (idx == vec_allkeyframesID[j])
+            //     {
+            //         auto kfPose = vec_allkeyframesPose[j];
+            //         Eigen::Vector3d twc_kf = kfPose.translation().cast<double>();
+            //         auto q_kf = kfPose.unit_quaternion().cast<double>();
+            //     }
+            // }
 
             //compare pose
             if (!vec_kfID.empty()){

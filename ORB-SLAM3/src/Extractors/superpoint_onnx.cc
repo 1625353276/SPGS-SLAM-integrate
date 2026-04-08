@@ -121,8 +121,9 @@ cv::Mat SuperPointOnnxRunner::Extractor_PreProcess(Configuration cfg , const cv:
 }
 
 int SuperPointOnnxRunner::Extractor_Inference(Configuration cfg , const cv::Mat& image)
-{   
-    std::lock_guard<std::mutex> lock(s_mutex);  // Protect inference from concurrent access
+{
+    // Note: Lock is now handled externally in SPextractor::ExtractSingleLayer
+    // to protect both Inference and PostProcess as atomic operation
     extractor_outputtensors.clear();
     //std::cout << "< - * -------- Extractor Inference START -------- * ->"<< std::endl;
     try 

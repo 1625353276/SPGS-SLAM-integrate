@@ -68,6 +68,9 @@ public:
     void SetMatchThresh(float thresh);
     double GetTimer(std::string name);
 
+    // Get mutex for thread-safe inference+postprocess
+    std::mutex& getMutex() { return s_mutex; }
+
     std::pair<std::vector<cv::Point2f>, std::vector<cv::Point2f>> GetKeypointsResult();
 
     int InitOrtEnv(Configuration cfg);

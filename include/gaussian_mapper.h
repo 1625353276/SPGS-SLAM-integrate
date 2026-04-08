@@ -268,7 +268,8 @@ protected:
                                       float,
                                       unsigned long,
                                       double,
-                                      cv::Mat > &kf);
+                                      cv::Mat,
+                                      bool> &kf);
 
     void handleNewKeyframe(std::tuple<unsigned long,
                                       unsigned long,
@@ -290,6 +291,7 @@ protected:
     std::shared_ptr<GaussianKeyframe> useOneRandomKeyframe();
     void increaseKeyframeTimesOfUse(std::shared_ptr<GaussianKeyframe> pkf, int times);
     void cullKeyframes();
+    void syncMissingKeyframesFromSLAM();
 
     void increasePcdByKeyframeInactiveGeoDensify(
         std::shared_ptr<GaussianKeyframe> pkf);
@@ -392,6 +394,7 @@ protected:
     int local_BA_increased_times_of_use_;
     int loop_closure_increased_times_of_use_;
     int max_keyframe_times_of_use_;  // 每个关键帧最高训练次数上限
+    bool pass_BA_fixed_keyframes_;
 
     bool cull_keyframes_;
     int stable_num_iter_existence_;

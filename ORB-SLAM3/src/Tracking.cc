@@ -3207,6 +3207,11 @@ bool Tracking::TrackLocalMap()
         }
     }
 
+    // Debug: print matching statistics (commented out for release)
+    // std::cout << "[TrackLocalMap] mnMatchesInliers=" << mnMatchesInliers 
+    //           << " mCurrentFrame.N=" << mCurrentFrame.N 
+    //           << " aux1=" << aux1 << " aux2=" << aux2 << std::endl;
+
     // Decide if the tracking was succesful
     // More restrictive if there was a relocalization recently
     mpLocalMapper->mnMatchesInliers=mnMatchesInliers;
@@ -3237,7 +3242,8 @@ bool Tracking::TrackLocalMap()
     }
     else
     {
-        if(mnMatchesInliers<30)
+        // Temporarily lowered threshold for debugging (from 30 to 15)
+        if(mnMatchesInliers<15)
             return false;
         else
             return true;
@@ -3329,16 +3335,16 @@ bool Tracking::NeedNewKeyFrame()
     if ((mSensor == System::RGBD && this->mImGray.size[0] == 680 && this->mImGray.size[1] == 1200) ||
         mSensor==System::STEREO) // replica
     {
-        thRefRatio = 0.98f;  // Raised to 0.98 to trigger c2 condition more easily
+        thRefRatio = 0.9f;  // Set to 0.9 for testing
         mMaxFrames_temp = mMaxFrames;
-        mMaxFrames = 5;  // Reduced to 5 for more frequent keyframe checks
+        mMaxFrames = 15;  // Set to 15 for testing
     }
     if ((mSensor == System::RGBD && this->mImGray.size[0] == 480 && this->mImGray.size[1] == 640) ||
         mSensor==System::STEREO) // Scannet
     {
-        thRefRatio = 0.98f;  // Raised to 0.98 to trigger c2 condition more easily
+        thRefRatio = 0.9f;  // Set to 0.9 for testing
         mMaxFrames_temp = mMaxFrames;
-        mMaxFrames = 5;  // Reduced to 5 for more frequent keyframe checks
+        mMaxFrames = 15;  // Set to 15 for testing
     }
 
     if((mSensor == System::MONOCULAR && this->mImGray.size[0] == 680 && this->mImGray.size[1] == 1200))

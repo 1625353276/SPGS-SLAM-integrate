@@ -136,15 +136,14 @@ void LocalMapping::Run()
                             mTinit += mpCurrentKeyFrame->mTimeStamp - mpCurrentKeyFrame->mPrevKF->mTimeStamp;
                         if(!mpCurrentKeyFrame->GetMap()->GetIniertialBA2())
                         {
-                            // Commented out to allow IMU initialization even with little motion
-                            // if((mTinit<10.f) && (dist<0.02))
-                            // {
-                            //     cout << "Not enough motion for initializing. Reseting..." << endl;
-                            //     unique_lock<mutex> lock(mMutexReset);
-                            //     mbResetRequestedActiveMap = true;
-                            //     mpMapToReset = mpCurrentKeyFrame->GetMap();
-                            //     mbBadImu = true;
-                            // }
+                            if((mTinit<10.f) && (dist<0.02))
+                            {
+                                cout << "Not enough motion for initializing. Reseting..." << endl;
+                                unique_lock<mutex> lock(mMutexReset);
+                                mbResetRequestedActiveMap = true;
+                                mpMapToReset = mpCurrentKeyFrame->GetMap();
+                                mbBadImu = true;
+                            }
                         }
 
                         bool bLarge = ((mpTracker->GetMatchesInliers()>75)&&mbMonocular)||((mpTracker->GetMatchesInliers()>100)&&!mbMonocular);
@@ -183,6 +182,10 @@ void LocalMapping::Run()
 
 #endif
 
+                // Check redundant local Keyframes
+                // KeyFrameCulling AFTER Local BA to ensure all optimized keyframes are passed to Gaussian Mapper
+                KeyFrameCulling();
+
                 // Initialize IMU here
                 if(!mpCurrentKeyFrame->GetMap()->isImuInitialized() && mbInertial)
                 {
@@ -191,17 +194,6 @@ void LocalMapping::Run()
                     else
                         InitializeIMU(1e2, 1e5, true);
                 }
-
-
-                // Check redundant local Keyframes
-                KeyFrameCulling();
-
-#ifdef REGISTER_TIMES
-                std::chrono::steady_clock::time_point time_EndKFCulling = std::chrono::steady_clock::now();
-
-                timeKFCulling_ms = std::chrono::duration_cast<std::chrono::duration<double,std::milli> >(time_EndKFCulling - time_EndLBA).count();
-                vdKFCulling_ms.push_back(timeKFCulling_ms);
-#endif
 
                 if ((mTinit<50.0f) && mbInertial)
                 {
@@ -278,6 +270,7 @@ void LocalMapping::Run()
         // Tracking will see that Local Mapping is busy
         SetAcceptKeyFrames(true);
 
+        // Check if finish is requested
         if(CheckFinish())
             break;
 
@@ -370,7 +363,7 @@ void LocalMapping::MapPointCulling()
 
         if(pMP->isBad())
             lit = mlpRecentAddedMapPoints.erase(lit);
-        else if(pMP->GetFoundRatio()<0.25f)
+        else if(pMP->GetFoundRatio()<0.05f)  // Changed from 0.25f to 0.05f to match Rover-SLAM
         {
             pMP->SetBadFlag();
             lit = mlpRecentAddedMapPoints.erase(lit);
@@ -939,9 +932,9 @@ void LocalMapping::KeyFrameCulling()
 
     float redundant_th;
     if(!mbInertial)
-        redundant_th = 0.9;
+        redundant_th = 0.95;  // Changed from 0.9 to match Rover-SLAM (more conservative)
     else if (mbMonocular)
-        redundant_th = 0.9;
+        redundant_th = 0.95;  // Changed from 0.9 to be more conservative
     else
         redundant_th = 0.5;
 

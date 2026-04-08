@@ -293,22 +293,34 @@ int main(int argc, char **argv)
         out_kf << "##[Gaussian Mapper]traj in Tum" << std::endl;
 
         std::size_t nkfs = pGausMapper->scene_->keyframes().size();
+        // std::cout << "[DEBUG] ========== Gaussian Keyframes ==========" << std::endl;
+        std::cout << "[INFO] Gaussian keyframes count: " << nkfs << std::endl;
         auto kfit = pGausMapper->scene_->keyframes().begin();
         std::deque<unsigned long> vec_kfID(nkfs, 0);
         std::deque<Sophus::SE3d> vec_kfPose(nkfs);
         std::deque<unsigned long> vec_kfid(nkfs, 0);
         std::deque<unsigned long> vec_kfts(nkfs, 0);
+        // std::cout << "[DEBUG] First 5 Gaussian keyframes:" << std::endl;
         for (std::size_t i = 0; i < nkfs; ++i) {
             vec_kfID[i] = (*kfit).second->frameID;
             vec_kfPose[i] = (*kfit).second->getPose();
             vec_kfid[i] = (*kfit).second->fid_;
-            vec_kfts[i] = (*kfit).second->TimeStamp;//时间戳不全，前面少了
+            vec_kfts[i] = (*kfit).second->TimeStamp;
+            // if (i < 5) {
+            //     std::cout << "[DEBUG]   Gaussian KF[" << i << "]: map_key=" << (*kfit).first
+            //               << ", frameID=" << vec_kfID[i] << ", fid_=" << vec_kfid[i] << std::endl;
+            // }
             auto trans = (*kfit).second->getPose().inverse().translation().cast<double>();
             auto rot = (*kfit).second->getPose().inverse().unit_quaternion().cast<double>();
             out_kf << setprecision(6) << (*kfit).second->TimeStamp << " " << setprecision(9)
                      << trans(0) << " " << trans(1) << " " << trans(2) << " " << rot.x() << " " << rot.y() << " " << rot.z() << " " << rot.w() << std::endl;
             ++kfit;
         }
+        // std::cout << "[DEBUG] Last Gaussian keyframe: frameID=" << vec_kfID[nkfs-1] << ", fid_=" << vec_kfid[nkfs-1] << std::endl;
+
+        // Print SLAM keyframes count for comparison
+        auto allkeyframes = pGausMapper->pSLAM_->getAtlas()->GetAllKeyFrames();
+        std::cout << "[INFO] SLAM keyframes count: " << allkeyframes.size() << std::endl;
 
         std::vector<std::vector<double>> Traj;
         // LoadTrajectory((output_dir / "CameraTrajectory_TUM.txt").string(), Traj);
@@ -317,19 +329,27 @@ int main(int argc, char **argv)
         // auto vpFs = pSLAM_->GetAllFrames();
         // auto vpFs = pSLAM_->GetAllFramesPose();
         // auto vpAllFs = pSLAM_->GetAllFramesPose();
-        auto allkeyframes = pGausMapper->pSLAM_->getAtlas()->GetAllKeyFrames();
-        std::deque<unsigned long> vec_allkeyframesID(nkfs, 0);
-        std::deque<Sophus::SE3f> vec_allkeyframesPose(nkfs);   
-        for (std::size_t i = 0; i < allkeyframes.size(); ++i) {
-            vec_allkeyframesID[i] = allkeyframes[i]->frameID;
-            vec_allkeyframesPose[i] = allkeyframes[i]->GetPose();
+        // auto allkeyframes = pGausMapper->pSLAM_->getAtlas()->GetAllKeyFrames();  // unused
+        // // DEBUG: Print keyframe counts
+        // std::cout << "[DEBUG] ========== SLAM Keyframes ==========" << std::endl;
+        // std::cout << "[DEBUG] allkeyframes.size(): " << allkeyframes.size() << std::endl;
+        // std::cout << "[DEBUG] nkfs: " << nkfs << " (will overflow: " << (allkeyframes.size() > nkfs ? "YES!" : "NO") << ")" << std::endl;
+        // std::cout << "[DEBUG] First 5 SLAM keyframes:" << std::endl;
+        // for (std::size_t i = 0; i < allkeyframes.size() && i < 5; ++i) {
+        //     std::cout << "[DEBUG]   SLAM KF[" << i << "]: frameID=" << allkeyframes[i]->frameID
+        //               << ", mnId=" << allkeyframes[i]->mnId << std::endl;
+        // }
+        // std::cout << "[DEBUG] Last SLAM keyframe: frameID=" << allkeyframes.back()->frameID
+        //           << ", mnId=" << allkeyframes.back()->mnId << std::endl;
 
-            // auto trans = (*kfit).second->getPose().inverse().translation().cast<double>();
-            // auto rot = (*kfit).second->getPose().inverse().unit_quaternion().cast<double>();
-            // out_kf << setprecision(6) << (*kfit).second->TimeStamp << " " << setprecision(9)
-            //          << trans(0) << " " << trans(1) << " " << trans(2) << " " << rot.x() << " " << rot.y() << " " << rot.z() << " " << rot.w() << std::endl;
-            // ++kfit;
-        }   
+        // // Build SLAM keyframe lookup: unused - only for debug comparison
+        // std::size_t allkf_count = std::min(nkfs, allkeyframes.size());
+        // std::deque<unsigned long> vec_allkeyframesID(allkf_count, 0);
+        // std::deque<Sophus::SE3f> vec_allkeyframesPose(allkf_count);
+        // for (std::size_t i = 0; i < allkf_count; ++i) {
+        //     vec_allkeyframesID[i] = allkeyframes[i]->frameID;
+        //     vec_allkeyframesPose[i] = allkeyframes[i]->GetPose();
+        // }   
 
         pGausMapper->gaussians_->eval();
         float dssim, psnr, psnr_gs;
@@ -340,6 +360,9 @@ int main(int argc, char **argv)
         double render_time;
         int idx, idx_scaffold;
         idx_scaffold = 0;
+        // std::cout << "[DEBUG] ========== Rendering Evaluation ===========" << std::endl;
+        // std::cout << "[DEBUG] Traj.size(): " << Traj.size() << std::endl;
+        // std::cout << "[DEBUG] Initial keyframe_id = vec_kfID.front() = " << vec_kfID.front() << std::endl;
         unsigned long keyframe_id = vec_kfID.front();
         for (idx = 0; idx < Traj.size(); idx++)
         {
@@ -444,23 +467,22 @@ int main(int argc, char **argv)
             //     new_kf->fid_ = pGausMapper->scene_->keyframes().size() - 1;
             // For test-set visualizations, we choose index to best fit a target image (e.g. Figure 8) or set it to an arbitrary value
 
-            for (std::size_t j = 0; j < allkeyframes.size(); ++j) {
-                if (idx == vec_allkeyframesID[j])
-                {
-                    auto kfPose = vec_allkeyframesPose[j];
-                    Eigen::Vector3d twc_kf = kfPose.translation().cast<double>();
-                    auto q_kf = kfPose.unit_quaternion().cast<double>();
-
-                    // std::cout << setprecision(6) << idx << " " << setprecision(9)
-                    //         << c2w_t(0) - twc_kf(0) << " " << c2w_t(1) - twc_kf(1) << " " << c2w_t(2) - twc_kf(2) << " " << c2w_q.x() - q_kf.x() << std::endl
-                    //         << " " << c2w_q.y() - q_kf.y() << " " << c2w_q.z() - q_kf.z() << " " << c2w_q.w() - q_kf.w() << std::endl;
-                }//完全一样
-            }
+            // // Unused: compare pose with SLAM keyframes (debug only)
+            // for (std::size_t j = 0; j < allkf_count; ++j) {
+            //     if (idx == vec_allkeyframesID[j])
+            //     {
+            //         auto kfPose = vec_allkeyframesPose[j];
+            //         Eigen::Vector3d twc_kf = kfPose.translation().cast<double>();
+            //         auto q_kf = kfPose.unit_quaternion().cast<double>();
+            //     }
+            // }
 
             //compare pose
             if (vec_kfID.size() > 0){
             if (idx == vec_kfID.front())
             {
+                // std::cout << "[DEBUG] idx=" << idx << " is a KEYFRAME! Updating keyframe_id from " << keyframe_id
+                //           << " to vec_kfid.front()=" << vec_kfid.front() << std::endl;
                 keyframe_id = vec_kfid.front();
                 auto kfPose = vec_kfPose.front();
                 Eigen::Vector3d twc_kf = kfPose.translation().cast<double>();

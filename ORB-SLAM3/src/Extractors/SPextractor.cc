@@ -595,8 +595,13 @@ int SPextractor::ExtractSingleLayer(const cv::Mat &image, std::vector<cv::KeyPoi
         cv::Mat image_copy = image.clone();
         cv::Mat inputImage = NormalizeImage(image_copy);
         featureExtractor->lastmatch = lastmatchnum;
-        featureExtractor->Extractor_Inference(cfg , inputImage);
-        featureExtractor->Extractor_PostProcess(cfg , std::move(featureExtractor->extractor_outputtensors[0]),vKeyPoints,Descriptors);
+        // Lock the entire inference+postprocess to prevent race condition
+        // when multiple threads share the same SuperPointOnnxRunner instance
+        {
+            std::lock_guard<std::mutex> lock(featureExtractor->getMutex());
+            featureExtractor->Extractor_Inference(cfg , inputImage);
+            featureExtractor->Extractor_PostProcess(cfg , std::move(featureExtractor->extractor_outputtensors[0]),vKeyPoints,Descriptors);
+        }
     }
     else{
         // if(!mModel->infer(image,  vKeyPoints, Descriptors, nfeatures))

@@ -1476,7 +1476,7 @@ void Optimizer::LocalBundleAdjustment(KeyFrame *pKF, bool* pbStopFlag, Map* pMap
 
     // Recover optimized data
     //Keyframes
-    opr.reserveKeyFrames(lLocalKeyFrames.size());
+    opr.reserveKeyFrames(lLocalKeyFrames.size() + lFixedCameras.size());
     for(list<KeyFrame*>::iterator lit=lLocalKeyFrames.begin(), lend=lLocalKeyFrames.end(); lit!=lend; lit++)
     {
         KeyFrame* pKFi = *lit;
@@ -1486,6 +1486,14 @@ void Optimizer::LocalBundleAdjustment(KeyFrame *pKF, bool* pbStopFlag, Map* pMap
         pKFi->SetPose(Tiw);
 
         opr.addKeyFrame(pKFi);
+    }
+
+    // Also pass fixed keyframes to Gaussian Mapper
+    // These frames have been optimized in previous BA iterations and provide accurate poses
+    for(list<KeyFrame*>::iterator lit=lFixedCameras.begin(), lend=lFixedCameras.end(); lit!=lend; lit++)
+    {
+        KeyFrame* pKFi = *lit;
+        opr.addKeyFrame(pKFi, false, true);  // isLoopClosureKF=false, isFixedKF=true
     }
 
     //Points

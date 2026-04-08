@@ -294,7 +294,7 @@ int main(int argc, char **argv)
 
 
         std::size_t nkfs = pGausMapper->scene_->keyframes().size();
-std::cout << "[eval]gaussian frame nums: " <<nkfs << std::endl;  
+        std::cout << "[INFO] Gaussian keyframes count: " << nkfs << std::endl;
 
 
         auto kfit = pGausMapper->scene_->keyframes().begin();
@@ -318,7 +318,10 @@ std::cout << "[eval]gaussian frame nums: " <<nkfs << std::endl;
         // 使用轨迹文件中的位姿进行评估（与 SEGS-SLAM 一致）
         std::vector<std::vector<double>> Traj;
         example_utils::LoadTrajectory((output_dir / "CameraTrajectory_TUM_bf.txt").string(), Traj);
-        std::cout << "[eval]Total frames from trajectory: " << Traj.size() << std::endl;   
+
+        // Print SLAM keyframes count for comparison
+        auto allkeyframes = pGausMapper->pSLAM_->getAtlas()->GetAllKeyFrames();
+        std::cout << "[INFO] SLAM keyframes count: " << allkeyframes.size() << std::endl;   
 
         pGausMapper->gaussians_->eval();
         float dssim, psnr, psnr_gs;
