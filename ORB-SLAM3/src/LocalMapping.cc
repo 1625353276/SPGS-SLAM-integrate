@@ -363,7 +363,7 @@ void LocalMapping::MapPointCulling()
 
         if(pMP->isBad())
             lit = mlpRecentAddedMapPoints.erase(lit);
-        else if(pMP->GetFoundRatio()<0.25f)
+        else if(pMP->GetFoundRatio()<0.05f)  // Changed from 0.25f to 0.05f to match Rover-SLAM
         {
             pMP->SetBadFlag();
             lit = mlpRecentAddedMapPoints.erase(lit);
@@ -932,9 +932,9 @@ void LocalMapping::KeyFrameCulling()
 
     float redundant_th;
     if(!mbInertial)
-        redundant_th = 0.9;
+        redundant_th = 0.95;  // Changed from 0.9 to match Rover-SLAM (more conservative)
     else if (mbMonocular)
-        redundant_th = 0.9;
+        redundant_th = 0.95;  // Changed from 0.9 to be more conservative
     else
         redundant_th = 0.5;
 

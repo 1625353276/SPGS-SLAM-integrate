@@ -273,6 +273,14 @@ int main(int argc, char **argv)
         // LoadTrajectory((output_dir / "CameraTrajectory_TUM.txt").string(), Traj);
         example_utils::LoadTrajectory((output_dir / "CameraTrajectory_TUM_bf.txt").string(), Traj);
 
+        // Check if trajectory is empty (e.g., SLAM tracking failed)
+        if (Traj.empty()) {
+            std::cerr << "[WARNING] Trajectory file is empty, skipping evaluation." << std::endl;
+            std::cerr << "This usually means SLAM tracking failed. Check the log for 'Fail to track local map!' messages." << std::endl;
+            return 0;
+        }
+        std::cout << "[INFO] Loaded " << Traj.size() << " trajectory entries" << std::endl;
+
         // Print SLAM keyframes count for comparison
         auto allkeyframes = pGausMapper->pSLAM_->getAtlas()->GetAllKeyFrames();
         std::cout << "[INFO] SLAM keyframes count: " << allkeyframes.size() << std::endl;
@@ -299,10 +307,12 @@ int main(int argc, char **argv)
         double render_time;
         int idx, idx_scaffold;
         idx_scaffold = 0;
-        unsigned long keyframe_id = vec_kfID.front();
+        unsigned long keyframe_id = 0;
+        if (!vec_kfID.empty())
+            keyframe_id = vec_kfID.front();
         int img_id = int(Traj[0][0]);
 
-        while(Traj[0][0] > vec_kfID.front())
+        while(!vec_kfID.empty() && Traj[0][0] > vec_kfID.front())
         {
             vec_kfID.pop_front();
             vec_kfPose.pop_front();

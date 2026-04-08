@@ -3207,6 +3207,11 @@ bool Tracking::TrackLocalMap()
         }
     }
 
+    // Debug: print matching statistics (commented out for release)
+    // std::cout << "[TrackLocalMap] mnMatchesInliers=" << mnMatchesInliers 
+    //           << " mCurrentFrame.N=" << mCurrentFrame.N 
+    //           << " aux1=" << aux1 << " aux2=" << aux2 << std::endl;
+
     // Decide if the tracking was succesful
     // More restrictive if there was a relocalization recently
     mpLocalMapper->mnMatchesInliers=mnMatchesInliers;
@@ -3237,7 +3242,8 @@ bool Tracking::TrackLocalMap()
     }
     else
     {
-        if(mnMatchesInliers<30)
+        // Temporarily lowered threshold for debugging (from 30 to 15)
+        if(mnMatchesInliers<15)
             return false;
         else
             return true;

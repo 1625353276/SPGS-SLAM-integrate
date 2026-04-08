@@ -304,6 +304,8 @@ void GaussianMapper::readConfigFromFile(std::filesystem::path cfg_path)
         settings_file["Mapper.local_BA_increased_times_of_use"].operator int();
     loop_closure_increased_times_of_use_ = 
         settings_file["Mapper.loop_closure_increased_times_of_use_"].operator int();
+    pass_BA_fixed_keyframes_ =
+        (settings_file["Mapper.pass_BA_fixed_keyframes"].operator int()) != 0;
     cull_keyframes_ =
         (settings_file["Mapper.cull_keyframes"].operator int()) != 0;
     large_rot_th_ =
@@ -1083,6 +1085,13 @@ void GaussianMapper::combineMappingOperations()
             auto& associated_kfs = opr.associatedKeyFrames();
 
             for (auto& kf : associated_kfs) {
+                // Check if this is a fixed keyframe
+                bool isFixedKF = std::get<16>(kf);
+                // Skip fixed keyframes if pass_BA_fixed_keyframes_ is disabled
+                if (isFixedKF && !pass_BA_fixed_keyframes_) {
+                    continue;
+                }
+
                 auto kfid = std::get<0>(kf);
                 std::shared_ptr<GaussianKeyframe> pkf = scene_->getKeyframe(kfid);
                 if (pkf) {
@@ -1336,7 +1345,8 @@ void GaussianMapper::handleNewKeyframe(
                float ,
                unsigned long,
                double,
-               cv::Mat> &kf)
+               cv::Mat,
+               bool> &kf)
 {
     std::shared_ptr<GaussianKeyframe> pkf =
         std::make_shared<GaussianKeyframe>(std::get<0>(kf), getIteration());

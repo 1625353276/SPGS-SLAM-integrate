@@ -223,7 +223,8 @@ protected:
                                       float,
                                       unsigned long,
                                       double,
-                                      cv::Mat > &kf);
+                                      cv::Mat,
+                                      bool> &kf);
 
     void handleNewKeyframe(std::tuple<unsigned long,
                                       unsigned long,
@@ -346,6 +347,7 @@ protected:
     int new_keyframe_times_of_use_;
     int local_BA_increased_times_of_use_;
     int loop_closure_increased_times_of_use_;
+    bool pass_BA_fixed_keyframes_;
 
     bool cull_keyframes_;
     int stable_num_iter_existence_;

@@ -1493,7 +1493,7 @@ void Optimizer::LocalBundleAdjustment(KeyFrame *pKF, bool* pbStopFlag, Map* pMap
     for(list<KeyFrame*>::iterator lit=lFixedCameras.begin(), lend=lFixedCameras.end(); lit!=lend; lit++)
     {
         KeyFrame* pKFi = *lit;
-        opr.addKeyFrame(pKFi);
+        opr.addKeyFrame(pKFi, false, true);  // isLoopClosureKF=false, isFixedKF=true
     }
 
     //Points

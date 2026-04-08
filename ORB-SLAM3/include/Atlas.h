@@ -105,7 +105,7 @@ public:
         // mvAssociatedFrames.reserve(nKFs);
     }
 
-    void addKeyFrame(KeyFrame* pKF, bool isLoopClosureKF = false)
+    void addKeyFrame(KeyFrame* pKF, bool isLoopClosureKF = false, bool isFixedKF = false)
     {
         std::unique_lock<std::mutex> lock(mMutexKeyFrames);
         std::vector<float> pixels;
@@ -128,7 +128,8 @@ public:
                 pKF->fy,
                 pKF->frameID,
                 pKF->mTimeStamp,
-                pKF->undistortedRGB.clone()));
+                pKF->undistortedRGB.clone(),
+                isFixedKF));
     }
 
 //     void addFrame(Frame* pKF, bool isLoopClosureKF = false)
@@ -165,7 +166,8 @@ public:
         float/*fy*/,
         unsigned long,
         double,
-        cv::Mat/*image*/  >>&
+        cv::Mat/*image*/,
+        bool/*isFixedKF*/  >>&
     associatedKeyFrames() { return mvAssociatedKeyFrames; }
 
     // std::vector<std::tuple<
@@ -233,7 +235,8 @@ protected:
         float/*fy*/,
         unsigned long,
         double,
-        cv::Mat/*image*/  >> mvAssociatedKeyFrames;
+        cv::Mat/*image*/,
+        bool/*isFixedKF*/  >> mvAssociatedKeyFrames;
 
     // std::vector<std::tuple<
     //     unsigned long/*Id*/,
