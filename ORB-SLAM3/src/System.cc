@@ -183,10 +183,14 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
                                      mSensor==IMU_MONOCULAR || mSensor==IMU_STEREO || mSensor==IMU_RGBD, strSequence);
     mptLocalMapping = new thread(&ORB_SLAM3::LocalMapping::Run,mpLocalMapper);
     mpLocalMapper->mInitFr = initFr;
-    if(settings_)
+    if(settings_) {
         mpLocalMapper->mThFarPoints = settings_->thFarPoints();
-    else
+        mpLocalMapper->SetMaxSkipBA(settings_->maxSkipBA());
+    }
+    else {
         mpLocalMapper->mThFarPoints = fsSettings["thFarPoints"];
+        mpLocalMapper->SetMaxSkipBA(fsSettings["LocalMapping.maxSkipBA"]);
+    }
     if(mpLocalMapper->mThFarPoints!=0)
     {
         cout << "Discard points further than " << mpLocalMapper->mThFarPoints << " m from current camera" << endl;
@@ -542,6 +546,15 @@ void System::Shutdown()
 bool System::isShutDown() {
     unique_lock<mutex> lock(mMutexReset);
     return mbShutDown;
+}
+
+void System::ReleaseFrontendModels()
+{
+    cout << "[System] Releasing frontend models to save GPU memory..." << endl;
+    mpTracker->ReleaseFrontendModels();
+    mpLocalMapper->ReleaseFrontendModels();
+    mpLoopCloser->ReleaseFrontendModels();
+    cout << "[System] Frontend models released. GPU memory available for Gaussian Splatting." << endl;
 }
 
 vector<KeyFrame*> System::SaveTrajectoryTUM(const string &filename)

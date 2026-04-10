@@ -17,7 +17,7 @@ Model.update_depth: 3
 Model.update_init_factor: 16
 Model.update_hierachy_factor: 4
 
-Model.use_feat_bank: 0 #False
+Model.use_feat_bank: 1 #False
 Model.appearance_dim: 32 #32
 Model.lowpoly: 0  # 0:false, 1 or other integer:true
 Model.ds: 1
@@ -44,7 +44,7 @@ Stereo.num_disparity: 128
 RGBD.min_depth: 0.0000000001
 RGBD.max_depth: 40.0
 
-Mapper.inactive_geo_densify: 0  # 0:false, 1 or other integer:true
+Mapper.inactive_geo_densify: 1 # 0:false, 1 or other integer:true
 Mapper.depth_cache: 10
 Mapper.min_num_initial_map_kfs: 10
 Mapper.new_keyframe_times_of_use: 2

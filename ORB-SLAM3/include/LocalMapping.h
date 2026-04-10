@@ -49,6 +49,8 @@ public:
 
     void SetTracker(Tracking* pTracker);
 
+    void SetMaxSkipBA(int maxSkipBA) { mnMaxSkipBA = maxSkipBA; }
+
     // Main function
     void Run();
 
@@ -71,6 +73,9 @@ public:
 
     void RequestFinish();
     bool isFinished();
+
+    // Release frontend models to save GPU memory
+    void ReleaseFrontendModels() { mspmatcher.ReleaseModels(); }
 
     int KeyframesInQueue(){
         unique_lock<std::mutex> lock(mMutexNewKFs);
@@ -193,6 +198,10 @@ protected:
     float mTinit;
 
     int countRefinement;
+
+    // Force BA after skipping too many keyframes
+    int mnSkippedBAs;  // Count consecutive skipped BAs
+    int mnMaxSkipBA;   // Force BA after skipping this many KFs (configurable)
 
     //DEBUG
     ofstream f_lm;

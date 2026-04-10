@@ -490,6 +490,12 @@ namespace ORB_SLAM3 {
         bool found;
 
         thFarPoints_ = readParameter<float>(fSettings,"System.thFarPoints",found,false);
+
+        // Local Mapping parameters
+        maxSkipBA_ = readParameter<int>(fSettings,"LocalMapping.maxSkipBA",found,false);
+        if(!found){
+            maxSkipBA_ = 5;  // Default value
+        }
     }
 
     void Settings::precomputeRectificationMaps() {

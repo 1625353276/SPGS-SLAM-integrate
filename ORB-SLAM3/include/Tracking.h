@@ -119,6 +119,9 @@ public:
     bool stopRequested();
 #endif
 
+    // Release frontend models (LightGlue/SuperPoint) to save GPU memory after tracking
+    void ReleaseFrontendModels();
+
 public:
 
     // Tracking states

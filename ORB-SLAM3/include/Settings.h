@@ -121,6 +121,8 @@ namespace ORB_SLAM3 {
 
         float thFarPoints() {return thFarPoints_;}
 
+        int maxSkipBA() {return maxSkipBA_;}
+
         cv::Mat M1l() {return M1l_;}
         cv::Mat M2l() {return M2l_;}
         cv::Mat M1r() {return M1r_;}
@@ -234,6 +236,11 @@ namespace ORB_SLAM3 {
          * Other stuff
          */
         float thFarPoints_;
+
+        /*
+         * Local Mapping
+         */
+        int maxSkipBA_;
 
     };
 };

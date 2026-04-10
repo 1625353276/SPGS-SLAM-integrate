@@ -85,6 +85,9 @@ public:
 
     bool isFinished();
 
+    // Release frontend models to save GPU memory
+    void ReleaseFrontendModels() { mspmatcher.ReleaseModels(); }
+
     Viewer* mpViewer;
 
 #ifdef REGISTER_TIMES

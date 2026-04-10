@@ -62,3 +62,9 @@ Viewer.ViewpointY: -10.0
 Viewer.ViewpointZ: -0.1
 Viewer.ViewpointF: 2000.0
 
+
+#--------------------------------------------------------------------------------------------
+# Local Mapping Parameters
+#--------------------------------------------------------------------------------------------
+# Force Local BA after skipping this many keyframes (0 to disable, default 0)
+LocalMapping.maxSkipBA: 0

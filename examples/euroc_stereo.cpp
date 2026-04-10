@@ -217,6 +217,10 @@ int main(int argc, char **argv)
 
     // Stop all threads
     pSLAM->Shutdown();
+
+    // Release frontend models (LightGlue/SuperPoint) to save GPU memory for Gaussian Splatting
+    pSLAM->ReleaseFrontendModels();
+
     training_thd.join();
     if (use_viewer)
         viewer_thd.join();
