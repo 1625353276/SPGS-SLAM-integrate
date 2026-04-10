@@ -1866,7 +1866,7 @@ void GaussianMapper::increasePcdByKeyframeInactiveGeoDensify(
         break;
         }
         points3D_valid = points3D_valid.index({point_valid_flags});
-        torch::Tensor colors_valid = points3D_valid;
+        torch::Tensor colors_valid = rgb.index({point_valid_flags});
 
         torch::Tensor Twc_tensor =
             tensor_utils::EigenMatrix2TorchTensor(

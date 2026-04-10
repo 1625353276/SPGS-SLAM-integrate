@@ -4358,4 +4358,17 @@ void Tracking::Release()
 }
 #endif
 
+void Tracking::ReleaseFrontendModels()
+{
+    std::cout << "[Tracking] Releasing frontend models (LightGlue/SuperPoint) to save GPU memory..." << std::endl;
+
+    // Release LightGlue matchers
+    mspmatcher.ReleaseModels();
+
+    // Release SuperPoint extractor (singleton)
+    SPextractor::ReleaseSuperPointModel();
+
+    std::cout << "[Tracking] Frontend models released. GPU memory freed for Gaussian Splatting." << std::endl;
+}
+
 } //namespace ORB_SLAM

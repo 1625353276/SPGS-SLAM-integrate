@@ -1,42 +1,8 @@
 #include <thread>
 #include "Matchers/lightglue_onnx.h"
 
-// Static members for singleton pattern
-LightGlueDecoupleOnnxRunner* LightGlueDecoupleOnnxRunner::s_instance = nullptr;
-std::mutex LightGlueDecoupleOnnxRunner::s_mutex;
-static bool s_initialized = false;
-
-LightGlueDecoupleOnnxRunner* LightGlueDecoupleOnnxRunner::GetInstance()
-{
-    if (s_instance == nullptr) {
-        std::lock_guard<std::mutex> lock(s_mutex);
-        if (s_instance == nullptr) {
-            s_instance = new LightGlueDecoupleOnnxRunner();
-        }
-    }
-    return s_instance;
-}
-
-void LightGlueDecoupleOnnxRunner::DestroyInstance()
-{
-    std::lock_guard<std::mutex> lock(s_mutex);
-    if (s_instance != nullptr) {
-        delete s_instance;
-        s_instance = nullptr;
-        s_initialized = false;
-    }
-}
-
 int LightGlueDecoupleOnnxRunner::InitOrtEnv(Configuration cfg)
 {
-    // Only initialize once
-    if (s_initialized) {
-        return EXIT_SUCCESS;
-    }
-    std::lock_guard<std::mutex> lock(s_mutex);
-    if (s_initialized) {
-        return EXIT_SUCCESS;
-    }
     std::cout << "< - * -------- INITIAL ONNXRUNTIME ENV START -------- * ->" << std::endl;
     try
     {
@@ -58,7 +24,7 @@ int LightGlueDecoupleOnnxRunner::InitOrtEnv(Configuration cfg)
             cuda_options.device_id = 0;
             cuda_options.cudnn_conv_algo_search = OrtCudnnConvAlgoSearchDefault;
             cuda_options.gpu_mem_limit = 0; 
-            cuda_options.arena_extend_strategy = 0; // kSameAsRequested: 按需分配，用完归还
+            cuda_options.arena_extend_strategy = 1; // 设置GPU内存管理中的Arena扩展策略
             cuda_options.do_copy_in_default_stream = 1; // 是否在默认CUDA流中执行数据复制
             cuda_options.has_user_compute_stream = 0;
             cuda_options.default_memory_arena_cfg = nullptr;
@@ -121,14 +87,13 @@ int LightGlueDecoupleOnnxRunner::InitOrtEnv(Configuration cfg)
 
 
         std::cout << "[INFO] ONNXRuntime environment created successfully." << std::endl;
-        s_initialized = true;
     }
     catch(const std::exception& ex)
     {
         std::cerr << "[ERROR] ONNXRuntime environment created failed : " << ex.what() << '\n';
         return EXIT_FAILURE;
     }
-
+    
     return EXIT_SUCCESS;
 }
 
@@ -198,15 +163,14 @@ std::vector<Ort::Value> LightGlueDecoupleOnnxRunner::Matcher_Inference(std::vect
             std::vector<cv::Point2f> kpts1 , float* desc0 , float* desc1)
 {
     //std::cout << "< - * -------- Matcher Inference START -------- * ->"<< std::endl;
-    // Use local shapes instead of member variable to avoid thread contention
-    std::vector<std::vector<int64_t>> input_shapes(4);
-    input_shapes[0] = {1 , static_cast<int64_t>(kpts0.size()) , 2};
-    input_shapes[1] = {1 , static_cast<int64_t>(kpts1.size()) , 2};
-    input_shapes[2] = {1 , static_cast<int64_t>(kpts0.size()) , 256};
-    input_shapes[3] = {1 , static_cast<int64_t>(kpts1.size()) , 256};
-
     try
     {
+        MatcherInputNodeShapes[0] = {1 , static_cast<int>(kpts0.size()) , 2};
+        MatcherInputNodeShapes[1] = {1 , static_cast<int>(kpts1.size()) , 2};
+
+        MatcherInputNodeShapes[2] = {1 , static_cast<int>(kpts0.size()) , 256};
+        MatcherInputNodeShapes[3] = {1 , static_cast<int>(kpts1.size()) , 256};
+        
         auto memory_info_handler = Ort::MemoryInfo::CreateCpu(OrtAllocatorType::OrtDeviceAllocator, OrtMemType::OrtMemTypeCPU);
 
         float* kpts0_data = new float[kpts0.size() * 2];
@@ -224,21 +188,21 @@ std::vector<Ort::Value> LightGlueDecoupleOnnxRunner::Matcher_Inference(std::vect
         std::vector<Ort::Value> input_tensors;
         input_tensors.push_back(Ort::Value::CreateTensor<float>(
             memory_info_handler , kpts0_data , kpts0.size() * 2 * sizeof(float), \
-            input_shapes[0].data() , input_shapes[0].size()
+            MatcherInputNodeShapes[0].data() , MatcherInputNodeShapes[0].size()
         ));
 
         input_tensors.push_back(Ort::Value::CreateTensor<float>(
             memory_info_handler , kpts1_data , kpts1.size() * 2 * sizeof(float), \
-            input_shapes[1].data() , input_shapes[1].size()
+            MatcherInputNodeShapes[1].data() , MatcherInputNodeShapes[1].size()
         ));
         input_tensors.push_back(Ort::Value::CreateTensor<float>(
             memory_info_handler , desc0 , kpts0.size() * 256 * sizeof(float), \
-            input_shapes[2].data() , input_shapes[2].size()
+            MatcherInputNodeShapes[2].data() , MatcherInputNodeShapes[2].size()
         ));
 
         input_tensors.push_back(Ort::Value::CreateTensor<float>(
             memory_info_handler , desc1 , kpts1.size() * 256 * sizeof(float) , \
-            input_shapes[3].data() , input_shapes[3].size()
+            MatcherInputNodeShapes[3].data() , MatcherInputNodeShapes[3].size()
         ));
 
 
@@ -251,10 +215,7 @@ std::vector<Ort::Value> LightGlueDecoupleOnnxRunner::Matcher_Inference(std::vect
         
         auto time_end = std::chrono::high_resolution_clock::now();
         auto diff = std::chrono::duration_cast<std::chrono::milliseconds>(time_end - time_start).count();
-        {
-            std::lock_guard<std::mutex> lock(s_mutex);
-            matcher_timer += diff;
-        }
+        matcher_timer += diff;
 
         for (auto& tensor : output_tensor)
         {
@@ -292,15 +253,14 @@ std::vector<Ort::Value> LightGlueDecoupleOnnxRunner::Matcher_Inference(std::vect
     // }
     
     //std::cout << "< - * -------- Matcher Inference START -------- * ->"<< std::endl;
-    // Use local shapes instead of member variable to avoid thread contention
-    std::vector<std::vector<int64_t>> input_shapes(4);
-    input_shapes[0] = {1 , static_cast<int64_t>(kpts0.size()) , 2};
-    input_shapes[1] = {1 , static_cast<int64_t>(kpts1.size()) , 2};
-    input_shapes[2] = {1 , static_cast<int64_t>(kpts0.size()) , 256};
-    input_shapes[3] = {1 , static_cast<int64_t>(kpts1.size()) , 256};
-
     try
     {
+        MatcherInputNodeShapes[0] = {1 , static_cast<int>(kpts0.size()) , 2};
+        MatcherInputNodeShapes[1] = {1 , static_cast<int>(kpts1.size()) , 2};
+
+        MatcherInputNodeShapes[2] = {1 , static_cast<int>(kpts0.size()) , 256};
+        MatcherInputNodeShapes[3] = {1 , static_cast<int>(kpts1.size()) , 256};
+        
         auto memory_info_handler = Ort::MemoryInfo::CreateCpu(OrtAllocatorType::OrtDeviceAllocator, OrtMemType::OrtMemTypeCPU);
 
         float* kpts0_data = new float[kpts0.size() * 2];
@@ -318,21 +278,21 @@ std::vector<Ort::Value> LightGlueDecoupleOnnxRunner::Matcher_Inference(std::vect
         std::vector<Ort::Value> input_tensors;
         input_tensors.push_back(Ort::Value::CreateTensor<float>(
             memory_info_handler , kpts0_data , kpts0.size() * 2 * sizeof(float), \
-            input_shapes[0].data() , input_shapes[0].size()
+            MatcherInputNodeShapes[0].data() , MatcherInputNodeShapes[0].size()
         ));
 
         input_tensors.push_back(Ort::Value::CreateTensor<float>(
             memory_info_handler , kpts1_data , kpts1.size() * 2 * sizeof(float), \
-            input_shapes[1].data() , input_shapes[1].size()
+            MatcherInputNodeShapes[1].data() , MatcherInputNodeShapes[1].size()
         ));
         input_tensors.push_back(Ort::Value::CreateTensor<float>(
             memory_info_handler , desc0 , kpts0.size() * 256 * sizeof(float), \
-            input_shapes[2].data() , input_shapes[2].size()
+            MatcherInputNodeShapes[2].data() , MatcherInputNodeShapes[2].size()
         ));
 
         input_tensors.push_back(Ort::Value::CreateTensor<float>(
             memory_info_handler , desc1 , kpts1.size() * 256 * sizeof(float) , \
-            input_shapes[3].data() , input_shapes[3].size()
+            MatcherInputNodeShapes[3].data() , MatcherInputNodeShapes[3].size()
         ));
 
 
@@ -345,10 +305,7 @@ std::vector<Ort::Value> LightGlueDecoupleOnnxRunner::Matcher_Inference(std::vect
         
         auto time_end = std::chrono::high_resolution_clock::now();
         auto diff = std::chrono::duration_cast<std::chrono::milliseconds>(time_end - time_start).count();
-        {
-            std::lock_guard<std::mutex> lock(s_mutex);
-            matcher_timer += diff;
-        }
+        matcher_timer += diff;
 
         for (auto& tensor : output_tensor)
         {
@@ -552,5 +509,9 @@ std::pair<std::vector<cv::Point2f>, std::vector<cv::Point2f>> LightGlueDecoupleO
 
 LightGlueDecoupleOnnxRunner::LightGlueDecoupleOnnxRunner(unsigned int threads) : \
     num_threads(threads)
+{
+}
+
+LightGlueDecoupleOnnxRunner::~LightGlueDecoupleOnnxRunner()
 {
 }

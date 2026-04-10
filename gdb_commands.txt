@@ -1,0 +1,9 @@
+set pagination off
+set confirm off
+handle SIGSEGV stop print
+break System::SaveTrajectoryKITTI
+run /home/ubuntu/SPGS-SLAM/Vocabulary/ORBvoc.txt /home/ubuntu/SPGS-SLAM/cfg/ORB_SLAM3/RGB-D/Replica/room0.yaml /home/ubuntu/SPGS-SLAM/cfg/gaussian_mapper/RGB-D/Replica/room0.yaml /home/ubuntu/data/replica/room0 /home/ubuntu/SPGS-SLAM/results/replica_rgbd_0/room0 no_viewer
+bt full
+info locals
+continue
+quit

@@ -10,8 +10,8 @@ using namespace std;
 
 namespace ORB_SLAM3
 {
-    const float SPmatcher::TH_HIGH = 1.0;  // Rover-SLAM original value
-    const float SPmatcher::TH_LOW = 0.8;   // Rover-SLAM original value
+    const float SPmatcher::TH_HIGH = 1.0;
+    const float SPmatcher::TH_LOW = 0.8;
     const int SPmatcher::HISTO_LENGTH = 30;
 
 SPmatcher::SPmatcher(float thre)
@@ -20,8 +20,7 @@ SPmatcher::SPmatcher(float thre)
     cfg.device = "cuda";
     cfg.extractorPath = "";
     cfg.extractorType = "";
-    // Use singleton instance instead of creating new one
-    featureMatcher = LightGlueDecoupleOnnxRunner::GetInstance();
+    featureMatcher = new LightGlueDecoupleOnnxRunner();
     featureMatcher->InitOrtEnv(cfg);
     featureMatcher->SetMatchThresh(thre);
     std::string mode = "LightGlueDecoupleOnnxRunner";

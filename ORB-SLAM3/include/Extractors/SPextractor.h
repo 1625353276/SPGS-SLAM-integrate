@@ -95,6 +95,11 @@ public:
         return mvInvLevelSigma2;
     }
 
+    // Release SuperPoint model to save GPU memory (call after tracking is done)
+    static void ReleaseSuperPointModel() {
+        SuperPointOnnxRunner::DestroyInstance();
+    }
+
     std::vector<cv::Mat> mvImagePyramid;
 
     SuperPointOnnxRunner* featureExtractor;

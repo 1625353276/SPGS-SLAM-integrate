@@ -1477,6 +1477,9 @@ void Optimizer::LocalBundleAdjustment(KeyFrame *pKF, bool* pbStopFlag, Map* pMap
     // Recover optimized data
     //Keyframes
     opr.reserveKeyFrames(lLocalKeyFrames.size() + lFixedCameras.size());
+    // DEBUG: std::cout << "[DEBUG-BA] triggered by KF#" << pKF->mnId
+    //           << " local_kfs=" << lLocalKeyFrames.size()
+    //           << " fixed_kfs=" << lFixedCameras.size() << std::endl;
     for(list<KeyFrame*>::iterator lit=lLocalKeyFrames.begin(), lend=lLocalKeyFrames.end(); lit!=lend; lit++)
     {
         KeyFrame* pKFi = *lit;

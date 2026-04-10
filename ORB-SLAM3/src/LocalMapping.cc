@@ -34,7 +34,8 @@ namespace ORB_SLAM3
 LocalMapping::LocalMapping(System* pSys, Atlas *pAtlas, const float bMonocular, bool bInertial, const string &_strSeqName):
     mpSystem(pSys), mbMonocular(bMonocular), mbInertial(bInertial), mbResetRequested(false), mbResetRequestedActiveMap(false), mbFinishRequested(false), mbFinished(true), mpAtlas(pAtlas), bInitializing(false),
     mbAbortBA(false), mbStopped(false), mbStopRequested(false), mbNotStop(false), mbAcceptKeyFrames(true),
-    mIdxInit(0), mScale(1.0), mspmatcher(0.0), mInitSect(0), mbNotBA1(true), mbNotBA2(true), mIdxIteration(0), infoInertial(Eigen::MatrixXd::Zero(9,9))
+    mIdxInit(0), mScale(1.0), mspmatcher(0.0), mInitSect(0), mbNotBA1(true), mbNotBA2(true), mIdxIteration(0), infoInertial(Eigen::MatrixXd::Zero(9,9)),
+    mnSkippedBAs(0), mnMaxSkipBA(5)
 {
     mnMatchesInliers = 0;
 
@@ -103,7 +104,13 @@ void LocalMapping::Run()
 
             mbAbortBA = false;
 
-            if(!CheckNewKeyFrames())
+            bool bQueueEmptyAfter = !CheckNewKeyFrames();
+            bool bStopRequested = stopRequested();
+            // DEBUG: std::cout << "[DEBUG-LM] KF#" << mpCurrentKeyFrame->mnId
+            //           << " queue_empty=" << bQueueEmptyAfter
+            //           << " stop_requested=" << bStopRequested;
+
+            if(bQueueEmptyAfter)
             {
                 // Find more matches in neighbor keyframes and fuse point duplications
                 SearchInNeighbors();
@@ -122,10 +129,23 @@ void LocalMapping::Run()
             int num_MPs_BA = 0;
             int num_edges_BA = 0;
 
-            if(!CheckNewKeyFrames() && !stopRequested())
+            bool bQueueEmpty = bQueueEmptyAfter;  // Use previously checked value
+            bool bForceBA = (mnSkippedBAs >= mnMaxSkipBA);  // Force BA if skipped too many
+            bool bCanDoBA = (bQueueEmpty && !bStopRequested) || bForceBA;
+
+            // DEBUG: std::cout << " can_do_BA=" << bCanDoBA
+            //           << " queue_empty=" << bQueueEmpty
+            //           << " stop_requested=" << bStopRequested
+            //           << " force_BA=" << bForceBA
+            //           << " skipped_BAs=" << mnSkippedBAs
+            //           << " kfs_in_map=" << mpAtlas->KeyFramesInMap()
+            //           << std::endl;
+
+            if(bCanDoBA)
             {
                 if(mpAtlas->KeyFramesInMap()>2)
                 {
+
 
                     if(mbInertial && mpCurrentKeyFrame->GetMap()->isImuInitialized())
                     {
@@ -154,10 +174,35 @@ void LocalMapping::Run()
                     }
                     else
                     {
+                        // DEBUG: print covisibility info
+                        {
+                            const vector<KeyFrame*> vCovisKFs = mpCurrentKeyFrame->GetVectorCovisibleKeyFrames();
+                            vector<MapPoint*> vpMPs = mpCurrentKeyFrame->GetMapPointMatches();
+                            int nValidMPs = 0;
+                            for (auto pMP : vpMPs) if (pMP && !pMP->isBad()) nValidMPs++;
+                            // DEBUG: std::cout << "[DEBUG-COVIS] KF#" << mpCurrentKeyFrame->mnId
+                            //           << " covis_kfs=" << vCovisKFs.size()
+                            //           << " valid_mps=" << nValidMPs;
+                            // // print shared MPs with top covisible KFs
+                            // int printN = std::min((int)vCovisKFs.size(), 3);
+                            // for (int _i = 0; _i < printN; _i++) {
+                            //     int shared = mpCurrentKeyFrame->GetWeight(vCovisKFs[_i]);
+                            //     std::cout << " [KF#" << vCovisKFs[_i]->mnId << ":shared=" << shared << "]";
+                            // }
+                            // std::cout << std::endl;
+                        }
                         MappingOperation opr(MappingOperation::OprType::LocalMappingBA);
                         Optimizer::LocalBundleAdjustment(mpCurrentKeyFrame,&mbAbortBA, mpCurrentKeyFrame->GetMap(),num_FixedKF_BA,num_OptKF_BA,num_MPs_BA,num_edges_BA, opr);
                         b_doneLBA = true;
                         mpAtlas->pushMappingOperation(opr);
+                    }
+
+                    // Reset skip counter after successful BA
+                    if (b_doneLBA) {
+                        mnSkippedBAs = 0;
+                        // DEBUG: if (bForceBA) {
+                        //     std::cout << "[DEBUG-FORCE-BA] Forced BA executed after " << mnMaxSkipBA << " skipped KFs" << std::endl;
+                        // }
                     }
 
                 }
@@ -238,6 +283,11 @@ void LocalMapping::Run()
                         }
                     }
                 }
+            }
+            else
+            {
+                // BA skipped, increment counter
+                mnSkippedBAs++;
             }
 
 #ifdef REGISTER_TIMES
@@ -338,8 +388,14 @@ void LocalMapping::ProcessNewKeyFrame()
 
 void LocalMapping::EmptyQueue()
 {
-    while(CheckNewKeyFrames())
+    int count = 0;
+    // DEBUG: std::cout << "[DEBUG-EMPTYQUEUE] Start emptying queue" << std::endl;
+    while(CheckNewKeyFrames()) {
         ProcessNewKeyFrame();
+        count++;
+        // DEBUG: std::cout << "[DEBUG-EMPTYQUEUE] Processed KF#" << mpCurrentKeyFrame->mnId << " (count=" << count << ")" << std::endl;
+    }
+    // DEBUG: std::cout << "[DEBUG-EMPTYQUEUE] Finished, processed " << count << " keyframes" << std::endl;
 }
 
 void LocalMapping::MapPointCulling()
@@ -849,6 +905,7 @@ void LocalMapping::RequestStop()
     mbStopRequested = true;
     unique_lock<mutex> lock2(mMutexNewKFs);
     mbAbortBA = true;
+    // DEBUG: std::cout << "[DEBUG-REQUESTSTOP] Stop requested, queue_size=" << mlNewKeyFrames.size() << std::endl;
 }
 
 bool LocalMapping::Stop()

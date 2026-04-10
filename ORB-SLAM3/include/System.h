@@ -142,6 +142,10 @@ public:
     void Shutdown();
     bool isShutDown();
 
+    // Release frontend models (LightGlue/SuperPoint) to save GPU memory
+    // Call after Shutdown() when tracking is done
+    void ReleaseFrontendModels();
+
     // Save camera trajectory in the TUM RGB-D dataset format.
     // Only for stereo and RGB-D. This method does not work for monocular.
     // Call first Shutdown()

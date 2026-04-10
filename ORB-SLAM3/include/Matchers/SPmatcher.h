@@ -127,6 +127,15 @@ namespace ORB_SLAM3
         EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
         LightGlueDecoupleOnnxRunner* featureMatcher;
+
+        // Release GPU memory after tracking is done
+        void ReleaseModels() {
+            if (featureMatcher) {
+                delete featureMatcher;
+                featureMatcher = nullptr;
+            }
+        }
+
     protected:
         float RadiusByViewingCos(const float &viewCos);
 
