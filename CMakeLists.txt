@@ -397,7 +397,11 @@ target_link_libraries(scannet_rgbd
 # AR Viewer library
 add_library(ar_viewer_lib SHARED
     include/ar_viewer.h
+    include/ground_plane_tracker.h
+    include/navigation_2d.h
     src/ar_viewer.cpp
+    src/ground_plane_tracker.cpp
+    src/navigation_2d.cpp
     viewer/imgui/imgui.cpp
     viewer/imgui/imgui_demo.cpp
     viewer/imgui/imgui_draw.cpp

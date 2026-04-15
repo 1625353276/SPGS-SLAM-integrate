@@ -19,8 +19,79 @@
 #include <numeric>
 #include <filesystem>
 #include <map>
+#include <cmath>
 
 namespace SPGS {
+
+namespace {
+
+Sophus::SE3f BuildGroundAnchoredPose(const GroundPlaneState& plane,
+                                     const Eigen::Vector2f& uv,
+                                     float height_offset,
+                                     float yaw_rad)
+{
+    const Eigen::Vector3f position =
+        plane.center +
+        uv.x() * plane.axis_u +
+        uv.y() * plane.axis_v +
+        height_offset * plane.normal;
+
+    Eigen::Vector3f up = plane.normal.normalized();
+    Eigen::Vector3f forward =
+        std::sin(yaw_rad) * plane.axis_u.normalized() +
+        std::cos(yaw_rad) * plane.axis_v.normalized();
+    forward = forward - forward.dot(up) * up;
+    if (forward.norm() < 1e-6f) {
+        forward = plane.axis_v.normalized();
+    } else {
+        forward.normalize();
+    }
+
+    Eigen::Vector3f right = up.cross(forward).normalized();
+    forward = right.cross(up).normalized();
+
+    Eigen::Matrix3f R_world;
+    R_world.col(0) = right;
+    R_world.col(1) = up;
+    R_world.col(2) = forward;
+
+    return Sophus::SE3f(Eigen::Quaternionf(R_world), position);
+}
+
+std::vector<Eigen::Vector2f> ProjectMapPointsToPlaneUV(
+    const std::vector<ORB_SLAM3::MapPoint*>& map_points,
+    const GroundPlaneState& plane)
+{
+    std::vector<Eigen::Vector2f> points_uv;
+    points_uv.reserve(map_points.size());
+    for (auto* mp : map_points) {
+        if (!mp || mp->isBad()) continue;
+        const Eigen::Vector3f p = mp->GetWorldPos();
+        const Eigen::Vector3f delta = p - plane.center;
+        const float height = std::abs(delta.dot(plane.normal));
+        if (height > 0.08f) continue;
+        points_uv.emplace_back(delta.dot(plane.axis_u), delta.dot(plane.axis_v));
+    }
+    return points_uv;
+}
+
+float NormalizeAngleRad(float angle)
+{
+    while (angle > static_cast<float>(M_PI)) angle -= 2.0f * static_cast<float>(M_PI);
+    while (angle < -static_cast<float>(M_PI)) angle += 2.0f * static_cast<float>(M_PI);
+    return angle;
+}
+
+float ApproachAngleRad(float current, float target, float max_step)
+{
+    const float delta = NormalizeAngleRad(target - current);
+    if (std::abs(delta) <= max_step) {
+        return target;
+    }
+    return current + (delta > 0.0f ? max_step : -max_step);
+}
+
+} // namespace
 
 // ============================================================================
 // Shader sources
@@ -320,6 +391,7 @@ ARViewer::ARViewer(
     int w, int h,
     float fx, float fy, float cx, float cy)
     : pSLAM_(pSLAM)
+    , ground_plane_tracker_(std::make_unique<GroundPlaneTracker>(w, h, fx, fy, cx, cy))
     , img_w_(w), img_h_(h)
     , fx_(fx), fy_(fy), cx_(cx), cy_(cy)
 {}
@@ -451,6 +523,8 @@ void ARViewer::cleanup()
     if (point_shader_)    { glDeleteProgram(point_shader_);       point_shader_ = 0; }
     if (mp_vao_)          { glDeleteVertexArrays(1, &mp_vao_);    mp_vao_    = 0; }
     if (mp_vbo_)          { glDeleteBuffers(1, &mp_vbo_);         mp_vbo_    = 0; }
+    if (path_vao_)        { glDeleteVertexArrays(1, &path_vao_);  path_vao_  = 0; }
+    if (path_vbo_)        { glDeleteBuffers(1, &path_vbo_);       path_vbo_  = 0; }
 
     if (window_) { glfwDestroyWindow(window_); window_ = nullptr; }
     // NOTE: glfwTerminate() intentionally NOT called here
@@ -480,6 +554,13 @@ void ARViewer::run()
         if (ImGui::Checkbox("Show Map Points", &show_map_points_)) {
             std::cout << "[ARViewer] Map points: " << (show_map_points_ ? "ON" : "OFF") << std::endl;
         }
+        ImGui::Checkbox("Show Paths", &show_paths_);
+        ImGui::Separator();
+        ImGui::Text("Navigation Tuning:");
+        ImGui::SliderFloat("Grid Resolution", &nav_grid_params_.resolution, 0.02f, 0.12f, "%.3f");
+        ImGui::SliderInt("Padding Cells", &nav_grid_params_.padding_cells, 2, 16);
+        ImGui::SliderInt("Support Threshold", &nav_grid_params_.support_threshold, 1, 4);
+        ImGui::SliderInt("Hole Fill Neighbors", &nav_grid_params_.hole_fill_neighbors, 0, 8);
         // Note: Occlusion features removed - virtual objects always visible
 
         // Gaussian Mapper status & training control
@@ -523,10 +604,9 @@ void ARViewer::run()
                 }
             }
 
-            // Gaussian background preview & lighting
+            // Gaussian background preview
             if (itr > 0) {
                 ImGui::Checkbox("Gaussian Background (preview)", &show_gaussian_bg_);
-                ImGui::Checkbox("Gaussian Lighting (realistic)", &use_gaussian_lighting_);
                 // Note: Gaussian Occlusion removed due to instability
             } else {
                 ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f),
@@ -562,9 +642,68 @@ void ARViewer::run()
         ImGui::Text("Click to place object on detected plane");
         ImGui::Text("ESC to quit");
 
+        if (ground_plane_tracker_) {
+            const GroundPlaneState& plane_state = ground_plane_tracker_->getState();
+            ImGui::Separator();
+            ImGui::Text("Ground Plane: %s", ground_plane_tracker_->getStatusString().c_str());
+            ImGui::Text("Inliers: %d  Residual: %.4f", plane_state.inlier_count, plane_state.mean_residual);
+            ImGui::Text("Stability: %.2f", plane_state.stability_score);
+        }
+
+        if (!objects_.empty()) {
+            const auto& obj = objects_[0];
+            ImGui::Text("Walking: %s", obj.is_walking ? "yes" : "no");
+            ImGui::Text("Path points: %d", static_cast<int>(obj.planned_path_uv.size()));
+        }
+
         if (!plane_status_msg_.empty()) {
             ImGui::Separator();
             ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", plane_status_msg_.c_str());
+        }
+
+        ImGui::End();
+
+        ImGuiViewport* viewport = ImGui::GetMainViewport();
+        ImVec2 overlay_pos(viewport->WorkPos.x + viewport->WorkSize.x - 260.0f,
+                           viewport->WorkPos.y + 10.0f);
+        ImGui::SetNextWindowPos(overlay_pos, ImGuiCond_Always);
+        ImGui::SetNextWindowBgAlpha(0.35f);
+        ImGui::Begin("AR Debug Overlay", nullptr,
+                     ImGuiWindowFlags_NoDecoration |
+                     ImGuiWindowFlags_AlwaysAutoResize |
+                     ImGuiWindowFlags_NoSavedSettings |
+                     ImGuiWindowFlags_NoFocusOnAppearing |
+                     ImGuiWindowFlags_NoNav);
+
+        ImGui::Text("MapPts: %d", last_visible_map_points_);
+        ImGui::Text("NavPts: %d", last_projected_map_points_);
+        ImGui::Text("Plan: %s", last_path_plan_success_ ? "ok" : "idle/fail");
+        ImGui::Text("Waypoints: %d", last_planned_waypoint_count_);
+
+        if (!objects_.empty()) {
+            const auto& obj = objects_[0];
+            ImGui::Separator();
+            ImGui::Text("Anchored: %s", obj.anchored_to_ground ? "yes" : "no");
+            ImGui::Text("Cursor: %d / %d",
+                        static_cast<int>(obj.path_cursor),
+                        static_cast<int>(obj.planned_path_uv.size()));
+            ImGui::Text("UV: %.3f %.3f", obj.ground_uv.x(), obj.ground_uv.y());
+            ImGui::Text("Yaw: %.1f deg", obj.ground_yaw_rad * 180.0f / static_cast<float>(M_PI));
+        }
+
+        if (ground_plane_tracker_) {
+            const GroundPlaneState& plane_state = ground_plane_tracker_->getState();
+            ImGui::Separator();
+            ImGui::Text("Plane N: %.3f %.3f %.3f",
+                        plane_state.normal.x(), plane_state.normal.y(), plane_state.normal.z());
+        }
+
+        if (last_object_anchored_) {
+            ImGui::Separator();
+            ImGui::Text("Anchor P: %.3f %.3f %.3f",
+                        last_anchor_world_.x(), last_anchor_world_.y(), last_anchor_world_.z());
+            ImGui::Text("Anchor N: %.3f %.3f %.3f",
+                        last_anchor_normal_.x(), last_anchor_normal_.y(), last_anchor_normal_.z());
         }
 
         ImGui::End();
@@ -601,6 +740,26 @@ void ARViewer::stop()
 
 void ARViewer::render()
 {
+    const double now = glfwGetTime();
+    float dt = 0.0f;
+    if (last_render_time_ > 0.0) {
+        dt = static_cast<float>(now - last_render_time_);
+    }
+    last_render_time_ = now;
+
+    if (ground_plane_tracker_ && pSLAM_) {
+        Sophus::SE3f T_cw;
+        {
+            std::lock_guard<std::mutex> lk(pose_mutex_);
+            T_cw = current_pose_;
+        }
+        const std::vector<ORB_SLAM3::MapPoint*> tracked_points = pSLAM_->GetTrackedMapPoints();
+        last_visible_map_points_ = static_cast<int>(tracked_points.size());
+        ground_plane_tracker_->update(T_cw, tracked_points);
+    }
+
+    updateWalkingObjects(dt);
+
     // Upload any objects that were added before GL context existed
     {
         std::lock_guard<std::mutex> lk(obj_mutex_);
@@ -618,6 +777,7 @@ void ARViewer::render()
 
     renderBackground();
     if (show_map_points_) renderMapPoints();
+    if (show_paths_) renderPlannedPaths();
     // Note: Occlusion features removed - virtual objects always visible
     renderVirtualObjects();
 }
@@ -687,29 +847,17 @@ void ARViewer::renderVirtualObjects()
     for (auto& obj : objects_) {
         if (!obj.visible || !obj.mesh.loaded) continue;
 
-        // Get object position in world space
-        Eigen::Vector3f obj_pos = obj.pose.translation();
-
-        // Query lighting using Gaussian appearance embedding (fast, demonstrates neural gaussian power)
-        glm::vec3 lightDir = glm::normalize(glm::vec3(0.3f, -0.8f, 0.5f));  // Default
-        glm::vec3 ambient = glm::vec3(0.3f, 0.3f, 0.3f);  // Default
-
-        if (pGausMapper_ && use_gaussian_lighting_) {
-            // Get current camera pose
-            Sophus::SE3f T_cw;
-            {
-                std::lock_guard<std::mutex> lk(pose_mutex_);
-                T_cw = current_pose_;
-            }
-
-            // Query lighting from appearance embedding (much faster than MLP sampling)
-            float light_intensity = pGausMapper_->getLightingFromAppearance(T_cw);
-            if (light_intensity > 0.0f) {
-                // Adjust ambient based on learned appearance brightness
-                ambient = glm::vec3(0.2f, 0.2f, 0.2f) * (1.0f - light_intensity) +
-                          glm::vec3(0.5f, 0.5f, 0.5f) * light_intensity;
-            }
+        if (obj.anchored_to_ground && obj.anchor_plane_state.valid) {
+            obj.pose = BuildGroundAnchoredPose(
+                obj.anchor_plane_state,
+                obj.ground_uv,
+                obj.ground_height_offset,
+                obj.ground_yaw_rad);
         }
+
+        // Use a fixed light direction and fixed ambient term.
+        glm::vec3 lightDir = glm::normalize(glm::vec3(0.3f, -0.8f, 0.5f));  // Default
+        glm::vec3 ambient = glm::vec3(0.25f, 0.25f, 0.25f);  // Fixed baseline
 
         if (!obj.visible || !obj.mesh.loaded) continue;
 
@@ -731,15 +879,6 @@ void ARViewer::renderVirtualObjects()
 
         glm::mat4 MVP = P * V * M;
 
-        // Debug: print object NDC position (overwrite same line)
-        static int obj_debug_count = 0;
-        if (obj_debug_count++ % 30 == 0) {
-            glm::vec4 ndc = MVP * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
-            ndc /= ndc.w;
-            std::cout << "\r[Obj] " << obj.name << " ndc.z=" << std::fixed << std::setprecision(4) << ndc.z
-                      << "      " << std::flush;
-        }
-
         glUniformMatrix4fv(glGetUniformLocation(obj_shader_, "MVP"),   1, GL_FALSE, &MVP[0][0]);
         glUniformMatrix4fv(glGetUniformLocation(obj_shader_, "Model"), 1, GL_FALSE, &M[0][0]);
         glUniform3fv(glGetUniformLocation(obj_shader_, "tint"),        1, &obj.color[0]);
@@ -756,6 +895,80 @@ void ARViewer::renderVirtualObjects()
     }
 }
 
+void ARViewer::updateWalkingObjects(float dt)
+{
+    if (dt <= 0.0f) return;
+
+    constexpr float kMaxDt = 0.05f;
+    constexpr float kWalkSpeed = 0.20f;
+    constexpr float kAccel = 0.65f;
+    constexpr float kDecel = 0.85f;
+    constexpr float kWaypointSnapDistance = 0.025f;
+    constexpr float kGoalSlowdownDistance = 0.18f;
+    constexpr float kTurnRate = 4.8f;
+
+    dt = std::min(dt, kMaxDt);
+
+    std::lock_guard<std::mutex> lk(obj_mutex_);
+    for (auto& obj : objects_) {
+        if (!obj.anchored_to_ground || !obj.is_walking || !obj.anchor_plane_state.valid) continue;
+        if (obj.path_cursor >= obj.planned_path_uv.size()) {
+            obj.is_walking = false;
+            obj.current_walk_speed = 0.0f;
+            continue;
+        }
+
+        while (obj.path_cursor < obj.planned_path_uv.size()) {
+            const float dist_to_waypoint = (obj.planned_path_uv[obj.path_cursor] - obj.ground_uv).norm();
+            if (dist_to_waypoint > kWaypointSnapDistance) break;
+            obj.ground_uv = obj.planned_path_uv[obj.path_cursor];
+            obj.path_cursor++;
+        }
+
+        if (obj.path_cursor >= obj.planned_path_uv.size()) {
+            obj.is_walking = false;
+            obj.current_walk_speed = 0.0f;
+            continue;
+        }
+
+        const Eigen::Vector2f target_uv = obj.planned_path_uv[obj.path_cursor];
+        const Eigen::Vector2f delta = target_uv - obj.ground_uv;
+        const float dist = delta.norm();
+        if (dist < 1e-4f) continue;
+
+        Eigen::Vector2f move_dir = delta / dist;
+        const float desired_yaw = std::atan2(move_dir.x(), move_dir.y());
+        obj.ground_yaw_rad = ApproachAngleRad(obj.ground_yaw_rad, desired_yaw, kTurnRate * dt);
+
+        float desired_speed = kWalkSpeed;
+        if (obj.path_cursor == obj.planned_path_uv.size() - 1) {
+            const float slowdown = std::clamp(dist / kGoalSlowdownDistance, 0.15f, 1.0f);
+            desired_speed *= slowdown;
+        }
+
+        if (obj.current_walk_speed < desired_speed) {
+            obj.current_walk_speed = std::min(desired_speed, obj.current_walk_speed + kAccel * dt);
+        } else {
+            obj.current_walk_speed = std::max(desired_speed, obj.current_walk_speed - kDecel * dt);
+        }
+
+        const float yaw_error = std::abs(NormalizeAngleRad(desired_yaw - obj.ground_yaw_rad));
+        const float turn_slowdown = std::clamp(std::cos(yaw_error), 0.25f, 1.0f);
+        const float step = obj.current_walk_speed * turn_slowdown * dt;
+
+        if (step >= dist) {
+            obj.ground_uv = target_uv;
+            obj.path_cursor++;
+            if (obj.path_cursor >= obj.planned_path_uv.size()) {
+                obj.is_walking = false;
+                obj.current_walk_speed = 0.0f;
+            }
+        } else {
+            obj.ground_uv += move_dir * step;
+        }
+    }
+}
+
 void ARViewer::renderMapPoints()
 {
     if (!pSLAM_) return;
@@ -763,7 +976,7 @@ void ARViewer::renderMapPoints()
     // Get map points
     std::vector<ORB_SLAM3::MapPoint*> map_points = pSLAM_->GetTrackedMapPoints();
     if (map_points.empty()) {
-        std::cout << "[AR debug] No map points from SLAM" << std::endl;
+        last_visible_map_points_ = 0;
         return;
     }
 
@@ -796,12 +1009,8 @@ void ARViewer::renderMapPoints()
         }
     }
 
+    last_visible_map_points_ = visible_count;
     if (vertices.empty()) return;
-
-    static int mp_debug_frame = 0;
-    if (mp_debug_frame++ % 30 == 0) {
-        std::cout << "\r[MapPts] " << visible_count << "      " << std::flush;
-    }
 
     // Create/update VBO
     if (!mp_vao_) glGenVertexArrays(1, &mp_vao_);
@@ -832,6 +1041,88 @@ void ARViewer::renderMapPoints()
 
     glBindVertexArray(0);
     glEnable(GL_DEPTH_TEST);  // re-enable for virtual objects
+}
+
+void ARViewer::renderPlannedPaths()
+{
+    std::vector<float> path_vertices;
+    std::vector<int> path_counts;
+
+    {
+        std::lock_guard<std::mutex> lk(obj_mutex_);
+        for (const auto& obj : objects_) {
+            if (!obj.visible || !obj.anchored_to_ground || !obj.anchor_plane_state.valid) continue;
+            if (obj.planned_path_uv.size() < 2) continue;
+
+            const GroundPlaneState& plane = obj.anchor_plane_state;
+            const Eigen::Vector3f lift = 0.01f * plane.normal;
+            int vertex_count = 0;
+
+            const Eigen::Vector3f current_world =
+                plane.center +
+                obj.ground_uv.x() * plane.axis_u +
+                obj.ground_uv.y() * plane.axis_v +
+                obj.ground_height_offset * plane.normal +
+                lift;
+            path_vertices.push_back(current_world.x());
+            path_vertices.push_back(current_world.y());
+            path_vertices.push_back(current_world.z());
+            vertex_count++;
+
+            for (size_t i = obj.path_cursor; i < obj.planned_path_uv.size(); ++i) {
+                const Eigen::Vector2f& uv = obj.planned_path_uv[i];
+                const Eigen::Vector3f p_world =
+                    plane.center +
+                    uv.x() * plane.axis_u +
+                    uv.y() * plane.axis_v +
+                    obj.ground_height_offset * plane.normal +
+                    lift;
+                path_vertices.push_back(p_world.x());
+                path_vertices.push_back(p_world.y());
+                path_vertices.push_back(p_world.z());
+                vertex_count++;
+            }
+
+            if (vertex_count >= 2) {
+                path_counts.push_back(vertex_count);
+            } else {
+                path_vertices.resize(path_vertices.size() - static_cast<size_t>(vertex_count) * 3);
+            }
+        }
+    }
+
+    if (path_vertices.empty() || path_counts.empty()) return;
+
+    if (!path_vao_) glGenVertexArrays(1, &path_vao_);
+    if (!path_vbo_) glGenBuffers(1, &path_vbo_);
+
+    glBindVertexArray(path_vao_);
+    glBindBuffer(GL_ARRAY_BUFFER, path_vbo_);
+    glBufferData(GL_ARRAY_BUFFER, path_vertices.size() * sizeof(float), path_vertices.data(), GL_DYNAMIC_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
+
+    const glm::mat4 MVP = buildProjectionMatrix() * buildViewMatrix();
+
+    glEnable(GL_DEPTH_TEST);
+    glDepthMask(GL_TRUE);
+    glUseProgram(point_shader_);
+    glUniformMatrix4fv(glGetUniformLocation(point_shader_, "MVP"), 1, GL_FALSE, &MVP[0][0]);
+
+    int first = 0;
+    for (int count : path_counts) {
+        glUniform3f(glGetUniformLocation(point_shader_, "pointColor"), 1.0f, 0.55f, 0.15f);
+        glLineWidth(3.0f);
+        glDrawArrays(GL_LINE_STRIP, first, count);
+
+        glUniform3f(glGetUniformLocation(point_shader_, "pointColor"), 1.0f, 0.9f, 0.2f);
+        glPointSize(7.0f);
+        glDrawArrays(GL_POINTS, first, count);
+
+        first += count;
+    }
+
+    glBindVertexArray(0);
 }
 
 glm::mat4 ARViewer::buildProjectionMatrix() const
@@ -925,8 +1216,11 @@ int ARViewer::addObject(
 void ARViewer::setObjectPose(int id, const Sophus::SE3f& pose)
 {
     std::lock_guard<std::mutex> lk(obj_mutex_);
-    if (id >= 0 && id < (int)objects_.size())
+    if (id >= 0 && id < (int)objects_.size()) {
         objects_[id].pose = pose;
+        objects_[id].anchored_to_ground = false;
+        objects_[id].anchor_plane_state = GroundPlaneState();
+    }
 }
 
 void ARViewer::setObjectVisible(int id, bool visible)
@@ -999,11 +1293,38 @@ void ARViewer::scanModelsDirectory(const std::string& models_dir)
             config.texture_path = texture_file;
             config.default_scale = glm::vec3(0.3f, 0.3f, 0.3f);  // Default scale
             config.default_y_offset = 0.0f;
+            config.default_rotation_deg = glm::vec3(-90.0f, 0.0f, 0.0f);
 
             // Model-specific defaults
             if (folder_name == "SpongeBob" || folder_name == "spongebob") {
                 config.default_scale = glm::vec3(0.3f, 0.3f, 0.3f);
                 config.default_y_offset = 0.3f;
+            }
+
+            // Optional per-model config file
+            fs::path cfg_path = entry.path() / "model_config.yaml";
+            if (fs::exists(cfg_path) && fs::is_regular_file(cfg_path)) {
+                cv::FileStorage cfg_fs(cfg_path.string(), cv::FileStorage::READ);
+                if (cfg_fs.isOpened()) {
+                    float sx = (float)cfg_fs["scale_x"];
+                    float sy = (float)cfg_fs["scale_y"];
+                    float sz = (float)cfg_fs["scale_z"];
+                    float y_offset = (float)cfg_fs["y_offset"];
+                    float rx = (float)cfg_fs["rotation_x_deg"];
+                    float ry = (float)cfg_fs["rotation_y_deg"];
+                    float rz = (float)cfg_fs["rotation_z_deg"];
+
+                    if (sx != 0.0f && sy != 0.0f && sz != 0.0f)
+                        config.default_scale = glm::vec3(sx, sy, sz);
+                    if (cfg_fs["y_offset"].isReal() || cfg_fs["y_offset"].isInt())
+                        config.default_y_offset = y_offset;
+                    if (cfg_fs["rotation_x_deg"].isReal() || cfg_fs["rotation_x_deg"].isInt())
+                        config.default_rotation_deg.x = rx;
+                    if (cfg_fs["rotation_y_deg"].isReal() || cfg_fs["rotation_y_deg"].isInt())
+                        config.default_rotation_deg.y = ry;
+                    if (cfg_fs["rotation_z_deg"].isReal() || cfg_fs["rotation_z_deg"].isInt())
+                        config.default_rotation_deg.z = rz;
+                }
             }
 
             available_models_.push_back(config);
@@ -1032,10 +1353,15 @@ bool ARViewer::switchModel(int model_index)
     }
     objects_.clear();
 
-    // Create rotation to fix orientation (same as original)
-    Eigen::AngleAxisf rot_x(-(float)M_PI / 2.0f, Eigen::Vector3f::UnitX());
+    // Create model-specific correction rotation from per-model config
+    const float rx = config.default_rotation_deg.x * (float)M_PI / 180.0f;
+    const float ry = config.default_rotation_deg.y * (float)M_PI / 180.0f;
+    const float rz = config.default_rotation_deg.z * (float)M_PI / 180.0f;
+    Eigen::AngleAxisf rot_x(rx, Eigen::Vector3f::UnitX());
+    Eigen::AngleAxisf rot_y(ry, Eigen::Vector3f::UnitY());
+    Eigen::AngleAxisf rot_z(rz, Eigen::Vector3f::UnitZ());
     Sophus::SE3f obj_pose(
-        Eigen::Quaternionf(rot_x),
+        Eigen::Quaternionf(rot_z * rot_y * rot_x),
         Eigen::Vector3f(0.0f, 0.0f, config.default_y_offset));
 
     // Add new model
@@ -1095,12 +1421,14 @@ void ARViewer::mouseCallback(GLFWwindow* w, int button, int action, int)
         std::lock_guard<std::mutex> lk(v->obj_mutex_);
         if (!v->objects_.empty()) {
             int obj_id = 0;  // first object
-            bool placed = v->moveObjectToNearestMapPoint(obj_id, px, py, 50.0f);
-            if (placed) {
-                // Make visible only on successful plane placement
-                v->objects_[obj_id].visible = true;
+            if (!v->objects_[obj_id].visible) {
+                bool placed = v->moveObjectToNearestMapPoint(obj_id, px, py, 50.0f);
+                if (placed) {
+                    v->objects_[obj_id].visible = true;
+                }
+            } else {
+                v->planObjectPathToScreenPos(obj_id, px, py);
             }
-            // On failure: keep current visibility, plane_status_msg_ has the reason
         }
     }
 }
@@ -1152,143 +1480,32 @@ void ARViewer::moveObjectToScreenPos(int obj_id, double px, double py, float dep
     objects_[obj_id].pose = new_pose;
 }
 
-// ============================================================================
-// Plane detection via RANSAC on nearby map points
-// ============================================================================
-
 bool ARViewer::fitPlaneFromMapPoints(
     double px, double py,
-    float search_radius_px,
+    float /*search_radius_px*/,
     Eigen::Vector3f& plane_normal,
     Eigen::Vector3f& plane_point,
-    int min_inliers)
+    int /*min_inliers*/)
 {
-    if (!pSLAM_) return false;
+    if (!ground_plane_tracker_) return false;
+    if (!ground_plane_tracker_->hasLockedPlane()) return false;
 
-    // Get current T_cw
-    Sophus::SE3f T_cw;
-    {
-        std::lock_guard<std::mutex> lk(const_cast<std::mutex&>(pose_mutex_));
-        T_cw = current_pose_;
-    }
-    Eigen::Matrix3f R_cw = T_cw.rotationMatrix();
-    Eigen::Vector3f t_cw = T_cw.translation();
-
-    // Step 1: collect candidate map points within search radius
-    std::vector<ORB_SLAM3::MapPoint*> map_points = pSLAM_->GetTrackedMapPoints();
-    std::vector<Eigen::Vector3f> candidates;
-    candidates.reserve(map_points.size());
-
-    for (auto* mp : map_points) {
-        if (!mp || mp->isBad()) continue;
-        Eigen::Vector3f p_world = mp->GetWorldPos();
-        Eigen::Vector3f p_cam  = R_cw * p_world + t_cw;
-        if (p_cam.z() <= 0.1f) continue;
-
-        float u = fx_ * p_cam.x() / p_cam.z() + cx_;
-        float v = fy_ * p_cam.y() / p_cam.z() + cy_;
-        float du = u - (float)px;
-        float dv = v - (float)py;
-        if (std::sqrt(du * du + dv * dv) <= search_radius_px)
-            candidates.push_back(p_world);
-    }
-
-    if ((int)candidates.size() < min_inliers) {
-        std::cout << "[PlaneDetect] Not enough candidates: " << candidates.size()
-                  << " (need " << min_inliers << ")" << std::endl;
+    if (!ground_plane_tracker_->projectScreenPointToPlane(px, py, plane_point)) {
         return false;
     }
 
-    // Step 2: RANSAC plane fitting
-    const int   N_ITER        = 200;
-    const float INLIER_THRESH = 0.02f;   // 2 cm
-
-    std::mt19937 rng(42);
-    std::uniform_int_distribution<int> dist(0, (int)candidates.size() - 1);
-
-    int best_count = 0;
-    Eigen::Vector3f best_n(0, 1, 0);
-    float best_d = 0.0f;
-
-    for (int iter = 0; iter < N_ITER; ++iter) {
-        // Sample 3 distinct points
-        int i0 = dist(rng), i1, i2;
-        do { i1 = dist(rng); } while (i1 == i0);
-        do { i2 = dist(rng); } while (i2 == i0 || i2 == i1);
-
-        const Eigen::Vector3f& p0 = candidates[i0];
-        const Eigen::Vector3f& p1 = candidates[i1];
-        const Eigen::Vector3f& p2 = candidates[i2];
-
-        Eigen::Vector3f n = (p1 - p0).cross(p2 - p0);
-        if (n.norm() < 1e-6f) continue;
-        n.normalize();
-        float d = n.dot(p0);
-
-        int count = 0;
-        for (const auto& p : candidates)
-            if (std::abs(n.dot(p) - d) < INLIER_THRESH) ++count;
-
-        if (count > best_count) {
-            best_count = count;
-            best_n     = n;
-            best_d     = d;
-        }
-    }
-
-    if (best_count < min_inliers) {
-        std::cout << "[PlaneDetect] RANSAC failed: best inlier count=" << best_count << std::endl;
-        return false;
-    }
-
-    // Step 3: refine normal via SVD on inliers
-    std::vector<Eigen::Vector3f> inliers;
-    inliers.reserve(best_count);
-    for (const auto& p : candidates)
-        if (std::abs(best_n.dot(p) - best_d) < INLIER_THRESH)
-            inliers.push_back(p);
-
-    // Compute centroid
-    Eigen::Vector3f centroid = Eigen::Vector3f::Zero();
-    for (const auto& p : inliers) centroid += p;
-    centroid /= (float)inliers.size();
-
-    // Build 3x3 covariance matrix (A^T * A)
-    Eigen::Matrix3f cov = Eigen::Matrix3f::Zero();
-    for (const auto& p : inliers) {
-        Eigen::Vector3f q = p - centroid;
-        cov += q * q.transpose();
-    }
-
-    // Smallest eigenvector of cov = best-fit plane normal
-    Eigen::SelfAdjointEigenSolver<Eigen::Matrix3f> solver(cov);
-    Eigen::Vector3f n_refined = solver.eigenvectors().col(0);  // smallest eigenvalue
-
-    // Step 4: ensure normal points toward camera
-    Eigen::Vector3f cam_pos = T_cw.inverse().translation();
-    if (n_refined.dot(cam_pos - centroid) < 0.0f)
-        n_refined = -n_refined;
-
-    // Step 5: reject planes nearly perpendicular to view direction
-    //         (e.g. a vertical wall viewed almost face-on is fine; nearly edge-on is bad)
-    Eigen::Vector3f cam_dir = (centroid - cam_pos).normalized();
-    if (std::abs(n_refined.dot(cam_dir)) < 0.2f) {
-        std::cout << "[PlaneDetect] Plane nearly parallel to viewing ray, skip" << std::endl;
-        return false;
-    }
-
-    plane_normal = n_refined;
-    plane_point  = centroid;
-
-    std::cout << "[PlaneDetect] OK  inliers=" << inliers.size()
-              << "  n=(" << n_refined.transpose() << ")" << std::endl;
+    plane_normal = ground_plane_tracker_->getState().normal;
     return true;
 }
 
 bool ARViewer::moveObjectToNearestMapPoint(int obj_id, double px, double py, float /*max_pixel_dist*/)
 {
     if (obj_id < 0 || obj_id >= (int)objects_.size()) return false;
-    if (!pSLAM_) return false;
+    if (!ground_plane_tracker_) return false;
+    if (!ground_plane_tracker_->hasLockedPlane()) {
+        plane_status_msg_ = "Ground plane not locked yet";
+        return false;
+    }
 
     // -----------------------------------------------------------------------
     // Detect a local plane using progressively larger search radii.
@@ -1296,23 +1513,12 @@ bool ARViewer::moveObjectToNearestMapPoint(int obj_id, double px, double py, flo
     // if not enough map points are found at the smaller radius.
     // -----------------------------------------------------------------------
     Eigen::Vector3f plane_normal, place_pt;
-    bool plane_found = false;
-    float used_radius = 0.0f;
-    const float radii[] = { 50.0f, 100.0f, 150.0f, 200.0f, 250.0f };
-    for (float r : radii) {
-        if (fitPlaneFromMapPoints(px, py, r, plane_normal, place_pt)) {
-            plane_found = true;
-            used_radius = r;
-            break;
-        }
-    }
-    if (!plane_found) {
+    if (!fitPlaneFromMapPoints(px, py, 0.0f, plane_normal, place_pt)) {
         plane_status_msg_ = "未检测到平面，请在特征点可见处点击";
-        std::cout << "[ARViewer] Plane detection failed at all radii" << std::endl;
+        plane_status_msg_ = "Click does not hit the locked ground plane";
         return false;
     }
     plane_status_msg_.clear();
-    std::cout << "[ARViewer] Plane found at radius=" << used_radius << " px" << std::endl;
 
     // -----------------------------------------------------------------------
     // Build a rotation matrix that stands the object on the detected plane
@@ -1358,9 +1564,78 @@ bool ARViewer::moveObjectToNearestMapPoint(int obj_id, double px, double py, flo
     Sophus::SE3f new_pose(Eigen::Quaternionf(R_world), place_pt);
     objects_[obj_id].pose = new_pose;
 
-    std::cout << "[ARViewer] Object placed on plane at ("
-              << place_pt.transpose() << ")  normal=("
-              << plane_normal.transpose() << ")" << std::endl;
+    const GroundPlaneState& plane_state = ground_plane_tracker_->getState();
+    Eigen::Vector2f ground_uv;
+    if (!ground_plane_tracker_->worldToPlaneUV(place_pt, ground_uv)) {
+        plane_status_msg_ = "Failed to convert placement to plane coordinates";
+        return false;
+    }
+
+    objects_[obj_id].ground_uv = ground_uv;
+    objects_[obj_id].ground_height_offset = 0.0f;
+    objects_[obj_id].ground_yaw_rad =
+        std::atan2(forward.dot(plane_state.axis_u), forward.dot(plane_state.axis_v));
+    objects_[obj_id].anchored_to_ground = true;
+    objects_[obj_id].anchor_plane_state = plane_state;
+    objects_[obj_id].planned_path_uv.clear();
+    objects_[obj_id].path_cursor = 0;
+    objects_[obj_id].is_walking = false;
+    objects_[obj_id].current_walk_speed = 0.0f;
+    objects_[obj_id].pose = BuildGroundAnchoredPose(
+        objects_[obj_id].anchor_plane_state,
+        objects_[obj_id].ground_uv,
+        objects_[obj_id].ground_height_offset,
+        objects_[obj_id].ground_yaw_rad);
+    last_object_anchored_ = true;
+    last_anchor_world_ = place_pt;
+    last_anchor_normal_ = plane_normal;
+    last_path_plan_success_ = false;
+    last_planned_waypoint_count_ = 0;
+    return true;
+}
+
+bool ARViewer::planObjectPathToScreenPos(int obj_id, double px, double py)
+{
+    if (obj_id < 0 || obj_id >= (int)objects_.size()) return false;
+    if (!pSLAM_ || !ground_plane_tracker_) return false;
+
+    auto& obj = objects_[obj_id];
+    if (!obj.anchored_to_ground || !obj.anchor_plane_state.valid) return false;
+
+    Eigen::Vector3f target_world;
+    if (!ground_plane_tracker_->projectScreenPointToPlane(px, py, target_world)) {
+        plane_status_msg_ = "Target click is outside the tracked ground plane";
+        return false;
+    }
+
+    Eigen::Vector2f goal_uv;
+    const Eigen::Vector3f delta = target_world - obj.anchor_plane_state.center;
+    goal_uv.x() = delta.dot(obj.anchor_plane_state.axis_u);
+    goal_uv.y() = delta.dot(obj.anchor_plane_state.axis_v);
+
+    const std::vector<Eigen::Vector2f> support_points =
+        ProjectMapPointsToPlaneUV(pSLAM_->GetTrackedMapPoints(), obj.anchor_plane_state);
+    last_projected_map_points_ = static_cast<int>(support_points.size());
+    NavGrid grid = BuildWalkableGridFromPoints(support_points, obj.ground_uv, goal_uv, nav_grid_params_);
+    PathResult path = PlanPathAStar(grid, obj.ground_uv, goal_uv);
+    if (!path.success || path.waypoints_uv.size() < 2) {
+        plane_status_msg_ = "Path planning failed on the ground plane";
+        obj.planned_path_uv.clear();
+        obj.path_cursor = 0;
+        obj.is_walking = false;
+        obj.current_walk_speed = 0.0f;
+        last_path_plan_success_ = false;
+        last_planned_waypoint_count_ = 0;
+        return false;
+    }
+
+    obj.planned_path_uv = std::move(path.waypoints_uv);
+    obj.path_cursor = 1;
+    obj.is_walking = true;
+    obj.current_walk_speed = 0.0f;
+    plane_status_msg_.clear();
+    last_path_plan_success_ = true;
+    last_planned_waypoint_count_ = static_cast<int>(obj.planned_path_uv.size());
     return true;
 }
 

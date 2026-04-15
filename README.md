@@ -129,6 +129,36 @@ Usage is identical to SEGS-SLAM. All example binaries are in `bin/`.
     no_viewer
 ```
 
+## AR Navigation Demo
+
+`ar_demo_tum` now supports a SLAM-grounded AR navigation loop on the locked main plane:
+
+- First left click: place the virtual object on the tracked ground plane
+- Later left clicks: set a target on the same plane, run 2D A* on the plane grid, and move the object along the planned path
+- `Show Paths`: render the current planned path and waypoints in the viewer
+
+### Navigation Tuning Parameters
+
+These controls are available in the ImGui panel under `Navigation Tuning`:
+
+- `Grid Resolution`
+  Controls the size of each 2D navigation cell on the ground plane. Smaller values make the grid finer and the path more detailed, but can make the walkable region more fragmented.
+- `Padding Cells`
+  Expands the navigation grid extent around the start point, goal point, and projected SLAM support points. Larger values give the planner more room near the border of the observed plane.
+- `Support Threshold`
+  The minimum number of projected SLAM points required for a cell to become an initial walkable seed. Higher values are stricter and reduce noise, but can shrink the reachable area.
+- `Hole Fill Neighbors`
+  Controls how aggressively small holes inside the walkable area are filled. Higher values are more conservative; lower values connect sparse regions more easily.
+
+A practical starting point is:
+
+```text
+Grid Resolution: 0.05
+Padding Cells: 8
+Support Threshold: 1
+Hole Fill Neighbors: 5
+```
+
 ## Acknowledgements
 
 - [SEGS-SLAM](https://github.com/leaner-forever/SEGS-SLAM)

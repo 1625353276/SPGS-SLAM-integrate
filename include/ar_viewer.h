@@ -37,6 +37,9 @@
 #include <fstream>
 #include <sstream>
 
+#include "include/ground_plane_tracker.h"
+#include "include/navigation_2d.h"
+
 namespace ORB_SLAM3 { class System; }
 class GaussianMapper;
 
@@ -87,6 +90,7 @@ struct ModelConfig
     std::string texture_path;   // Path to texture file
     glm::vec3   default_scale;  // Default scale for this model
     float       default_y_offset; // Default Y offset for placement
+    glm::vec3   default_rotation_deg = glm::vec3(-90.0f, 0.0f, 0.0f); // Euler XYZ correction in degrees
 };
 
 // ============================================================================
@@ -107,6 +111,18 @@ struct VirtualObject
     std::string   obj_path;
     std::string   texture_path;
     bool          gpu_uploaded = false;
+
+    // Ground-plane anchor state. When enabled, pose is reconstructed each frame
+    // from plane-local coordinates instead of trusting a stale world translation.
+    bool          anchored_to_ground = false;
+    Eigen::Vector2f ground_uv = Eigen::Vector2f::Zero();
+    float         ground_height_offset = 0.0f;
+    float         ground_yaw_rad = 0.0f;
+    GroundPlaneState anchor_plane_state;
+    std::vector<Eigen::Vector2f> planned_path_uv;
+    size_t        path_cursor = 0;
+    bool          is_walking = false;
+    float         current_walk_speed = 0.0f;
 };
 
 // ============================================================================
@@ -195,7 +211,7 @@ public:
     // Move object to clicked screen position (assumes fixed depth)
     void moveObjectToScreenPos(int obj_id, double px, double py, float depth = 0.5f);
 
-    // Move object to nearest map point from screen click (with plane detection)
+    // Move object using the locked ground plane from screen click
     bool moveObjectToNearestMapPoint(int obj_id, double px, double py, float max_pixel_dist = 30.0f);
 
     // Toggle map point visualization
@@ -210,10 +226,6 @@ public:
     // Toggle Gaussian background preview (has training latency, for visual inspection)
     void setShowGaussianBg(bool show) { show_gaussian_bg_ = show; }
     bool showGaussianBg() const { return show_gaussian_bg_; }
-
-    // Toggle Gaussian-based lighting estimation for virtual objects
-    void setGaussianLighting(bool enable) { use_gaussian_lighting_ = enable; }
-    bool gaussianLighting() const { return use_gaussian_lighting_; }
 
     // Plane detection status message (empty = no error)
     std::string plane_status_msg_;
@@ -234,14 +246,23 @@ public:
 
 private:
     bool show_map_points_   = false;
+    bool show_paths_        = true;
     bool show_gaussian_bg_  = false;   // Gaussian background preview
-    bool use_gaussian_lighting_ = true; // Use Gaussian MLP to estimate lighting for virtual objects
+    NavGridBuildParams nav_grid_params_;
+    int  last_visible_map_points_ = 0;
+    int  last_projected_map_points_ = 0;
+    int  last_planned_waypoint_count_ = 0;
+    bool last_path_plan_success_ = false;
+    bool last_object_anchored_ = false;
+    Eigen::Vector3f last_anchor_world_ = Eigen::Vector3f::Zero();
+    Eigen::Vector3f last_anchor_normal_ = Eigen::Vector3f::Zero();
 
     // Gaussian Mapper (optional)
     std::shared_ptr<GaussianMapper> pGausMapper_;
 
     // Render map points as small dots (visualization)
     void renderMapPoints();
+    void renderPlannedPaths();
 
     bool initGL();
     void initShaders();
@@ -252,6 +273,7 @@ private:
     void render();
     void renderBackground();
     void renderVirtualObjects();
+    void updateWalkingObjects(float dt);
 
     // Projection matrix from camera intrinsics
     glm::mat4 buildProjectionMatrix() const;
@@ -259,12 +281,13 @@ private:
     // View matrix from SLAM pose
     glm::mat4 buildViewMatrix() const;
 
-    // RANSAC plane fitting from map points near clicked position
+    // Compatibility wrapper: placement now uses the locked ground plane tracker.
     bool fitPlaneFromMapPoints(double px, double py,
                                float search_radius_px,
                                Eigen::Vector3f& plane_normal,
                                Eigen::Vector3f& plane_point,
                                int min_inliers = 6);
+    bool planObjectPathToScreenPos(int obj_id, double px, double py);
 
     // Callbacks
     static void keyCallback(GLFWwindow* w, int key, int sc, int action, int mods);
@@ -272,6 +295,7 @@ private:
 
 private:
     std::shared_ptr<ORB_SLAM3::System> pSLAM_;
+    std::unique_ptr<GroundPlaneTracker> ground_plane_tracker_;
 
     // Camera intrinsics
     int   img_w_, img_h_;
@@ -294,6 +318,8 @@ private:
     // Map points (visualization + occlusion share same VAO/VBO)
     GLuint mp_vao_ = 0;
     GLuint mp_vbo_ = 0;
+    GLuint path_vao_ = 0;
+    GLuint path_vbo_ = 0;
 
     // Virtual objects
     std::vector<VirtualObject> objects_;
@@ -313,6 +339,7 @@ private:
     std::atomic<bool> running_{false};
     std::atomic<bool> gl_ready_{false};
     std::thread       thread_;
+    double last_render_time_ = 0.0;
 };
 
 } // namespace SPGS
