@@ -437,6 +437,47 @@ target_link_libraries(ar_demo_live
     ${OpenCV_LIBRARIES}
     "${TORCH_LIBRARIES}")
 
+# AR Launcher for TUM Dataset (GUI)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(GTK3 REQUIRED gtk+-3.0)
+
+add_executable(ar_launcher_tum examples/ar_launcher_tum.cpp
+    viewer/imgui/imgui.cpp
+    viewer/imgui/imgui_demo.cpp
+    viewer/imgui/imgui_draw.cpp
+    viewer/imgui/imgui_impl_glfw.cpp
+    viewer/imgui/imgui_impl_opengl3.cpp
+    viewer/imgui/imgui_tables.cpp
+    viewer/imgui/imgui_widgets.cpp)
+target_link_libraries(ar_launcher_tum
+    ${OpenCV_LIBRARIES}
+    glm::glm
+    glfw
+    OpenGL::GL
+    GLEW::GLEW
+    ${GTK3_LIBRARIES})
+target_include_directories(ar_launcher_tum PRIVATE ${GTK3_INCLUDE_DIRS})
+target_compile_options(ar_launcher_tum PRIVATE ${GTK3_CFLAGS_OTHER})
+
+# AR Launcher for Live Webcam (GUI)
+add_executable(ar_launcher_live examples/ar_launcher_live.cpp
+    viewer/imgui/imgui.cpp
+    viewer/imgui/imgui_demo.cpp
+    viewer/imgui/imgui_draw.cpp
+    viewer/imgui/imgui_impl_glfw.cpp
+    viewer/imgui/imgui_impl_opengl3.cpp
+    viewer/imgui/imgui_tables.cpp
+    viewer/imgui/imgui_widgets.cpp)
+target_link_libraries(ar_launcher_live
+    ${OpenCV_LIBRARIES}
+    glm::glm
+    glfw
+    OpenGL::GL
+    GLEW::GLEW
+    ${GTK3_LIBRARIES})
+target_include_directories(ar_launcher_live PRIVATE ${GTK3_INCLUDE_DIRS})
+target_compile_options(ar_launcher_live PRIVATE ${GTK3_CFLAGS_OTHER})
+
 # ##################################################################################
 # ##  Build the mapping examples to ${PROJECT_SOURCE_DIR}/bin
 # ##################################################################################

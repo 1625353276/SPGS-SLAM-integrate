@@ -2974,16 +2974,16 @@ float GaussianMapper::getLightingFromAppearance(const Sophus::SE3f& Tcw)
             appearance_feat = gaussians_->mlp_apperance->forward(ob_pose);
         }
 
-        // Extract brightness from appearance features
-        // The appearance embedding encodes view-dependent lighting conditions
+        // Compress the appearance embedding into a scalar brightness estimate.
         float mean_feat = appearance_feat.mean().item<float>();
         float std_feat = appearance_feat.std().item<float>();
 
-        // Map to light intensity: higher feature values + higher variance = brighter scene
-        // This is learned during training without explicit supervision
-        float light_intensity = 0.5f + 0.5f * std::tanh(mean_feat * 2.0f);
+        // Use both mean activation and feature spread, then map to a wider visible range.
+        float intensity_from_mean = 0.5f + 0.35f * std::tanh(mean_feat * 2.0f);
+        float intensity_from_std = 0.15f * std::tanh(std_feat * 3.0f);
+        float light_intensity = intensity_from_mean + intensity_from_std;
 
-        return std::max(0.1f, std::min(1.0f, light_intensity));
+        return std::max(0.05f, std::min(1.0f, light_intensity));
     }
     catch (const std::exception& e) {
         // Silently fail and return default

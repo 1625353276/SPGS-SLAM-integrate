@@ -285,11 +285,6 @@ int main(int argc, char** argv)
         viewer.setCurrentImage(frame);
         viewer.setCurrentPose(T_wc);
 
-        // Show model only when tracking is good (state == 2)
-        if (!viewer.getAvailableModels().empty()) {
-            viewer.setObjectVisible(0, state == 2);
-        }
-
         if (++frame_no % 30 == 0) {
             cout << "\rFrame " << frame_no
                  << "  tracking state=" << state

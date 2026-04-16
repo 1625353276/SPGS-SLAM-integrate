@@ -1,0 +1,67 @@
+%YAML:1.0
+
+#--------------------------------------------------------------------------------------------
+# XJ8422 lens + monocular USB camera (approximate intrinsics for 640x360)
+#
+# Source used:
+#   Lens model: XJ8422
+#   Sensor format: 1/2.7"
+#   Focal length: 3.8 mm
+#
+# IMPORTANT:
+#   This file is a first-pass estimate. Because 640x360 keeps the same 16:9
+#   aspect ratio as 1280x720, intrinsics are scaled by 0.5 in both axes.
+#   Replace these values with a real calibration when possible.
+#--------------------------------------------------------------------------------------------
+File.version: "1.0"
+
+Camera.type: "PinHole"
+
+# Approximate intrinsics for 640x360, scaled from the 1280x720 estimate.
+Camera1.fx: 453.0
+Camera1.fy: 453.0
+Camera1.cx: 320.0
+Camera1.cy: 180.0
+
+# Distortion is unknown from the lens datasheet.
+Camera1.k1: 0.0
+Camera1.k2: 0.0
+Camera1.p1: 0.0
+Camera1.p2: 0.0
+Camera1.k3: 0.0
+
+# Camera frames per second
+Camera.fps: 30
+
+# Color order (0: BGR, 1: RGB)
+Camera.RGB: 1
+
+# Resolution
+Camera.width: 640
+Camera.height: 360
+
+#--------------------------------------------------------------------------------------------
+# ORB Parameters
+#--------------------------------------------------------------------------------------------
+ORBextractor.nFeatures: 1000
+ORBextractor.scaleFactor: 1.2
+ORBextractor.nLevels: 1
+ORBextractor.iniThFAST: 20
+ORBextractor.minThFAST: 7
+
+# Force Local BA after skipping this many keyframes (0 to disable, default 0)
+LocalMapping.maxSkipBA: 10
+
+#--------------------------------------------------------------------------------------------
+# Viewer Parameters
+#--------------------------------------------------------------------------------------------
+Viewer.KeyFrameSize: 0.05
+Viewer.KeyFrameLineWidth: 1.0
+Viewer.GraphLineWidth: 0.9
+Viewer.PointSize: 2.0
+Viewer.CameraSize: 0.08
+Viewer.CameraLineWidth: 3.0
+Viewer.ViewpointX: 0.0
+Viewer.ViewpointY: -0.7
+Viewer.ViewpointZ: -1.8
+Viewer.ViewpointF: 500.0
