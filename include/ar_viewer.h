@@ -39,7 +39,6 @@
 
 #include "include/ground_plane_tracker.h"
 #include "include/navigation_2d.h"
-#include "include/multi_plane_detector.h"
 
 namespace ORB_SLAM3 { class System; }
 class GaussianMapper;
@@ -208,6 +207,7 @@ public:
     void setObjectPose(int id, const Sophus::SE3f& pose);
     void setObjectVisible(int id, bool visible);
     void removeObject(int id);
+    void resetObjectPlacement(int id);
 
     // Move object to clicked screen position (assumes fixed depth)
     void moveObjectToScreenPos(int obj_id, double px, double py, float depth = 0.5f);
@@ -249,8 +249,6 @@ private:
     bool show_map_points_   = false;
     bool show_paths_        = true;
     bool show_gaussian_bg_  = false;   // Gaussian background preview
-    bool show_multi_planes_ = true;    // Multi-plane visualization
-    bool use_multi_plane_   = true;    // Use multi-plane system (vs single ground plane)
     NavGridBuildParams nav_grid_params_;
     int  last_visible_map_points_ = 0;
     int  last_projected_map_points_ = 0;
@@ -263,14 +261,9 @@ private:
     // Gaussian Mapper (optional)
     std::shared_ptr<GaussianMapper> pGausMapper_;
 
-    // Multi-plane detector (new)
-    std::unique_ptr<MultiPlaneDetector> multi_plane_detector_;
-    MultiPlaneConfig multi_plane_config_;
-
     // Render map points as small dots (visualization)
     void renderMapPoints();
     void renderPlannedPaths();
-    void renderPlanes();  // Render detected planes
 
     bool initGL();
     void initShaders();
