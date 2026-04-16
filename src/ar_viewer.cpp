@@ -392,6 +392,7 @@ ARViewer::ARViewer(
     float fx, float fy, float cx, float cy)
     : pSLAM_(pSLAM)
     , ground_plane_tracker_(std::make_unique<GroundPlaneTracker>(w, h, fx, fy, cx, cy))
+    , multi_plane_detector_(std::make_unique<MultiPlaneDetector>(w, h, fx, fy, cx, cy, multi_plane_config_))
     , img_w_(w), img_h_(h)
     , fx_(fx), fy_(fy), cx_(cx), cy_(cy)
 {}
@@ -555,6 +556,46 @@ void ARViewer::run()
             std::cout << "[ARViewer] Map points: " << (show_map_points_ ? "ON" : "OFF") << std::endl;
         }
         ImGui::Checkbox("Show Paths", &show_paths_);
+
+        // Multi-plane controls
+        ImGui::Separator();
+        ImGui::Checkbox("Multi-Plane Mode", &use_multi_plane_);
+        if (use_multi_plane_) {
+            ImGui::Checkbox("Show Planes", &show_multi_planes_);
+
+            // Display plane statistics
+            if (multi_plane_detector_) {
+                ImGui::Text("Planes: %s", multi_plane_detector_->getStatusString().c_str());
+
+                const auto& planes = multi_plane_detector_->getPlanes();
+                if (ImGui::CollapsingHeader("Detected Planes")) {
+                    for (const auto& plane : planes) {
+                        if (plane.status == PlaneStatus::Lost) continue;
+
+                        ImGui::PushID(plane.id);
+
+                        // Color indicator based on type
+                        ImVec4 color;
+                        switch (plane.type) {
+                            case PlaneType::Floor:   color = ImVec4(0.2f, 0.8f, 0.2f, 1.0f); break;
+                            case PlaneType::Table:   color = ImVec4(0.8f, 0.6f, 0.2f, 1.0f); break;
+                            case PlaneType::Wall:    color = ImVec4(0.3f, 0.5f, 0.9f, 1.0f); break;
+                            case PlaneType::Slope:   color = ImVec4(0.8f, 0.3f, 0.8f, 1.0f); break;
+                            default:                 color = ImVec4(0.6f, 0.6f, 0.6f, 1.0f); break;
+                        }
+
+                        ImGui::ColorButton("##color", color, ImGuiColorEditFlags_NoTooltip, ImVec2(16, 16));
+                        ImGui::SameLine();
+                        ImGui::Text("#%d %s [%s] - %d pts",
+                            plane.id, plane.typeString().c_str(),
+                            plane.statusString().c_str(), plane.inlier_count);
+
+                        ImGui::PopID();
+                    }
+                }
+            }
+        }
+
         ImGui::Separator();
         ImGui::Text("Navigation Tuning:");
         ImGui::SliderFloat("Grid Resolution", &nav_grid_params_.resolution, 0.02f, 0.12f, "%.3f");
@@ -747,15 +788,23 @@ void ARViewer::render()
     }
     last_render_time_ = now;
 
-    if (ground_plane_tracker_ && pSLAM_) {
-        Sophus::SE3f T_cw;
-        {
-            std::lock_guard<std::mutex> lk(pose_mutex_);
-            T_cw = current_pose_;
-        }
-        const std::vector<ORB_SLAM3::MapPoint*> tracked_points = pSLAM_->GetTrackedMapPoints();
-        last_visible_map_points_ = static_cast<int>(tracked_points.size());
+    Sophus::SE3f T_cw;
+    {
+        std::lock_guard<std::mutex> lk(pose_mutex_);
+        T_cw = current_pose_;
+    }
+
+    const std::vector<ORB_SLAM3::MapPoint*> tracked_points = pSLAM_->GetTrackedMapPoints();
+    last_visible_map_points_ = static_cast<int>(tracked_points.size());
+
+    // Update ground plane tracker (legacy, single plane)
+    if (ground_plane_tracker_) {
         ground_plane_tracker_->update(T_cw, tracked_points);
+    }
+
+    // Update multi-plane detector (new)
+    if (multi_plane_detector_ && use_multi_plane_) {
+        multi_plane_detector_->update(tracked_points, T_cw);
     }
 
     updateWalkingObjects(dt);
@@ -776,6 +825,7 @@ void ARViewer::render()
     }
 
     renderBackground();
+    if (show_multi_planes_ && use_multi_plane_) renderPlanes();
     if (show_map_points_) renderMapPoints();
     if (show_paths_) renderPlannedPaths();
     // Note: Occlusion features removed - virtual objects always visible
@@ -1123,6 +1173,155 @@ void ARViewer::renderPlannedPaths()
     }
 
     glBindVertexArray(0);
+}
+
+void ARViewer::renderPlanes()
+{
+    if (!multi_plane_detector_) return;
+
+    const auto& planes = multi_plane_detector_->getPlanes();
+    if (planes.empty()) return;
+
+    // Get current camera pose
+    Sophus::SE3f T_cw;
+    {
+        std::lock_guard<std::mutex> lk(const_cast<std::mutex&>(pose_mutex_));
+        T_cw = current_pose_;
+    }
+    const Eigen::Matrix3f R_cw = T_cw.rotationMatrix();
+    const Eigen::Vector3f t_cw = T_cw.translation();
+
+    // Collect plane boundary vertices
+    std::vector<float> plane_vertices;
+    std::vector<float> normal_vertices;
+    std::vector<float> colors;
+
+    // Color palette for different plane types
+    auto getColorForType = [](PlaneType type, PlaneStatus status) -> std::tuple<float, float, float> {
+        float alpha = (status == PlaneStatus::Locked) ? 1.0f :
+                      (status == PlaneStatus::Tracking) ? 0.7f : 0.4f;
+
+        switch (type) {
+            case PlaneType::Floor:   return {0.2f * alpha, 0.8f * alpha, 0.2f * alpha};  // Green
+            case PlaneType::Table:   return {0.8f * alpha, 0.6f * alpha, 0.2f * alpha};  // Orange
+            case PlaneType::Wall:    return {0.3f * alpha, 0.5f * alpha, 0.9f * alpha};  // Blue
+            case PlaneType::Slope:   return {0.8f * alpha, 0.3f * alpha, 0.8f * alpha};  // Purple
+            case PlaneType::Ceiling: return {0.5f * alpha, 0.5f * alpha, 0.5f * alpha};  // Gray
+            default:                 return {0.6f * alpha, 0.6f * alpha, 0.6f * alpha};  // Gray
+        }
+    };
+
+    for (const auto& plane : planes) {
+        if (plane.status == PlaneStatus::Lost) continue;
+        if (plane.inlier_count < 10) continue;
+
+        auto [r, g, b] = getColorForType(plane.type, plane.status);
+
+        // Draw plane boundary as a rectangle (in camera space)
+        // Four corners of the plane in world space
+        Eigen::Vector3f corners[4] = {
+            plane.center + plane.extent_u * plane.axis_u + plane.extent_v * plane.axis_v,
+            plane.center - plane.extent_u * plane.axis_u + plane.extent_v * plane.axis_v,
+            plane.center - plane.extent_u * plane.axis_u - plane.extent_v * plane.axis_v,
+            plane.center + plane.extent_u * plane.axis_u - plane.extent_v * plane.axis_v,
+        };
+
+        // Transform to camera space and add as lines
+        for (int i = 0; i < 4; ++i) {
+            Eigen::Vector3f p1_cam = R_cw * corners[i] + t_cw;
+            Eigen::Vector3f p2_cam = R_cw * corners[(i + 1) % 4] + t_cw;
+
+            // Only draw if in front of camera
+            if (p1_cam.z() > 0.1f && p2_cam.z() > 0.1f) {
+                plane_vertices.push_back(p1_cam.x());
+                plane_vertices.push_back(p1_cam.y());
+                plane_vertices.push_back(p1_cam.z());
+                plane_vertices.push_back(p2_cam.x());
+                plane_vertices.push_back(p2_cam.y());
+                plane_vertices.push_back(p2_cam.z());
+
+                colors.push_back(r); colors.push_back(g); colors.push_back(b);
+                colors.push_back(r); colors.push_back(g); colors.push_back(b);
+            }
+        }
+
+        // Draw normal vector at center
+        Eigen::Vector3f center_cam = R_cw * plane.center + t_cw;
+        if (center_cam.z() > 0.1f) {
+            Eigen::Vector3f normal_end = plane.center + 0.15f * plane.normal;
+            Eigen::Vector3f normal_end_cam = R_cw * normal_end + t_cw;
+
+            normal_vertices.push_back(center_cam.x());
+            normal_vertices.push_back(center_cam.y());
+            normal_vertices.push_back(center_cam.z());
+            normal_vertices.push_back(normal_end_cam.x());
+            normal_vertices.push_back(normal_end_cam.y());
+            normal_vertices.push_back(normal_end_cam.z());
+        }
+    }
+
+    // Draw plane boundaries
+    if (!plane_vertices.empty()) {
+        GLuint vao, vbo;
+        glGenVertexArrays(1, &vao);
+        glGenBuffers(1, &vbo);
+
+        glBindVertexArray(vao);
+        glBindBuffer(GL_ARRAY_BUFFER, vbo);
+        glBufferData(GL_ARRAY_BUFFER, plane_vertices.size() * sizeof(float),
+                     plane_vertices.data(), GL_DYNAMIC_DRAW);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
+
+        glm::mat4 P = buildProjectionMatrix();
+        glm::mat4 cvToGl(1.0f);
+        cvToGl[1][1] = -1.0f;
+        cvToGl[2][2] = -1.0f;
+        glm::mat4 MVP = P * cvToGl;
+
+        glDisable(GL_DEPTH_TEST);
+        glUseProgram(point_shader_);
+        glUniformMatrix4fv(glGetUniformLocation(point_shader_, "MVP"), 1, GL_FALSE, &MVP[0][0]);
+        glUniform3f(glGetUniformLocation(point_shader_, "pointColor"), 0.5f, 0.8f, 1.0f);
+        glLineWidth(2.0f);
+        glDrawArrays(GL_LINES, 0, (GLsizei)(plane_vertices.size() / 3));
+
+        glBindVertexArray(0);
+        glDeleteVertexArrays(1, &vao);
+        glDeleteBuffers(1, &vbo);
+    }
+
+    // Draw normal vectors
+    if (!normal_vertices.empty()) {
+        GLuint vao, vbo;
+        glGenVertexArrays(1, &vao);
+        glGenBuffers(1, &vbo);
+
+        glBindVertexArray(vao);
+        glBindBuffer(GL_ARRAY_BUFFER, vbo);
+        glBufferData(GL_ARRAY_BUFFER, normal_vertices.size() * sizeof(float),
+                     normal_vertices.data(), GL_DYNAMIC_DRAW);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
+
+        glm::mat4 P = buildProjectionMatrix();
+        glm::mat4 cvToGl(1.0f);
+        cvToGl[1][1] = -1.0f;
+        cvToGl[2][2] = -1.0f;
+        glm::mat4 MVP = P * cvToGl;
+
+        glUseProgram(point_shader_);
+        glUniformMatrix4fv(glGetUniformLocation(point_shader_, "MVP"), 1, GL_FALSE, &MVP[0][0]);
+        glUniform3f(glGetUniformLocation(point_shader_, "pointColor"), 1.0f, 1.0f, 0.0f);
+        glLineWidth(2.0f);
+        glDrawArrays(GL_LINES, 0, (GLsizei)(normal_vertices.size() / 3));
+
+        glBindVertexArray(0);
+        glDeleteVertexArrays(1, &vao);
+        glDeleteBuffers(1, &vbo);
+    }
+
+    glEnable(GL_DEPTH_TEST);
 }
 
 glm::mat4 ARViewer::buildProjectionMatrix() const

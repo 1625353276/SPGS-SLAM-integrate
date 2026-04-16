@@ -399,9 +399,12 @@ add_library(ar_viewer_lib SHARED
     include/ar_viewer.h
     include/ground_plane_tracker.h
     include/navigation_2d.h
+    include/plane.h
+    include/multi_plane_detector.h
     src/ar_viewer.cpp
     src/ground_plane_tracker.cpp
     src/navigation_2d.cpp
+    src/multi_plane_detector.cpp
     viewer/imgui/imgui.cpp
     viewer/imgui/imgui_demo.cpp
     viewer/imgui/imgui_draw.cpp
