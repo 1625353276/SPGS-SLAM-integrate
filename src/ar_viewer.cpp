@@ -28,8 +28,7 @@ namespace {
 Sophus::SE3f BuildGroundAnchoredPose(const GroundPlaneState& plane,
                                      const Eigen::Vector2f& uv,
                                      float height_offset,
-                                     float yaw_rad,
-                                     const Eigen::Quaternionf& model_rotation = Eigen::Quaternionf::Identity())
+                                     float yaw_rad)
 {
     const Eigen::Vector3f position =
         plane.center +
@@ -56,9 +55,7 @@ Sophus::SE3f BuildGroundAnchoredPose(const GroundPlaneState& plane,
     R_world.col(1) = up;
     R_world.col(2) = forward;
 
-    // Apply model-specific rotation correction from YAML config
-    Eigen::Quaternionf R_world_q(R_world);
-    return Sophus::SE3f(R_world_q * model_rotation, position);
+    return Sophus::SE3f(Eigen::Quaternionf(R_world), position);
 }
 
 std::vector<Eigen::Vector2f> ProjectMapPointsToPlaneUV(
@@ -126,6 +123,22 @@ bool ProjectScreenPointToPlane(const Sophus::SE3f& T_cw,
     const float v = delta.dot(plane.axis_v);
     return std::abs(u) <= plane.extent_u * 1.25f &&
            std::abs(v) <= plane.extent_v * 1.25f;
+}
+
+bool ProjectWorldPointToImage(const Sophus::SE3f& T_cw,
+                              int img_w, int img_h,
+                              float fx, float fy, float cx, float cy,
+                              const Eigen::Vector3f& world_pt,
+                              cv::Point2f& image_pt)
+{
+    const Eigen::Vector3f p_cam = T_cw * world_pt;
+    if (p_cam.z() <= 1e-4f) return false;
+
+    const float u = fx * (p_cam.x() / p_cam.z()) + cx;
+    const float v = fy * (p_cam.y() / p_cam.z()) + cy;
+    image_pt = cv::Point2f(u, v);
+    return u >= 0.0f && u < static_cast<float>(img_w) &&
+           v >= 0.0f && v < static_cast<float>(img_h);
 }
 
 } // namespace
@@ -592,6 +605,7 @@ void ARViewer::run()
             std::cout << "[ARViewer] Map points: " << (show_map_points_ ? "ON" : "OFF") << std::endl;
         }
         ImGui::Checkbox("Show Paths", &show_paths_);
+        ImGui::Checkbox("Show Reference Plane", &show_reference_plane_);
 
         ImGui::Separator();
         ImGui::Text("Navigation Tuning:");
@@ -679,7 +693,7 @@ void ARViewer::run()
 
         ImGui::Separator();
         ImGui::Text("Reference Plane:");
-        if (!reference_plane_initialized_) {
+    if (!reference_plane_initialized_) {
             if (ImGui::Button(init_reference_plane_mode_ ? "Cancel Init Reference Plane"
                                                          : "Init Reference Plane")) {
                 init_reference_plane_mode_ = !init_reference_plane_mode_;
@@ -691,6 +705,7 @@ void ARViewer::run()
             if (ImGui::Button("Reinit Reference Plane")) {
                 reference_plane_initialized_ = false;
                 reference_plane_state_ = GroundPlaneState();
+                reference_plane_template_ = ReferencePlaneTemplate();
                 init_reference_plane_mode_ = true;
                 plane_status_msg_ = "Reference plane cleared. Click a stable plane region to reinitialize.";
                 if (!objects_.empty()) {
@@ -726,6 +741,13 @@ void ARViewer::run()
                             reference_plane_state_.normal.x(),
                             reference_plane_state_.normal.y(),
                             reference_plane_state_.normal.z());
+                ImGui::Text("Ref Template Pts: %d",
+                            static_cast<int>(reference_plane_template_.plane_uv.size()));
+                ImGui::Text("Ref Track: %s", reference_plane_tracking_valid_ ? "valid" : "invalid");
+                ImGui::Text("Ref Matches/Inliers: %d / %d",
+                            reference_plane_tracking_matches_,
+                            reference_plane_tracking_inliers_);
+                ImGui::Text("Ref RMSE: %.3f px", reference_plane_tracking_rmse_);
             }
         }
 
@@ -840,6 +862,8 @@ void ARViewer::render()
         ground_plane_tracker_->update(T_cw, tracked_points);
     }
 
+    updateReferencePlaneTracking();
+
     updateWalkingObjects(dt);
 
     // Upload any objects that were added before GL context existed
@@ -859,7 +883,7 @@ void ARViewer::render()
 
     renderBackground();
     if (show_map_points_) renderMapPoints();
-    renderReferencePlane();
+    if (show_reference_plane_) renderReferencePlane();
     if (show_paths_) renderPlannedPaths();
     // Note: Occlusion features removed - virtual objects always visible
     renderVirtualObjects();
@@ -935,13 +959,12 @@ void ARViewer::renderVirtualObjects()
                 obj.anchor_plane_state,
                 obj.ground_uv,
                 obj.ground_height_offset,
-                obj.ground_yaw_rad,
-                obj.model_rotation_correction);
+                obj.ground_yaw_rad);
         }
 
         // Use a fixed light direction and fixed ambient term.
-        glm::vec3 lightDir = glm::normalize(glm::vec3(0.3f, -0.8f, 0.5f));  // Default
-        glm::vec3 ambient = glm::vec3(0.25f, 0.25f, 0.25f);  // Fixed baseline
+        glm::vec3 lightDir = glm::normalize(glm::vec3(0.25f, -0.85f, 0.45f));
+        glm::vec3 ambient = glm::vec3(0.45f, 0.45f, 0.45f);
 
         if (!obj.visible || !obj.mesh.loaded) continue;
 
@@ -1281,6 +1304,137 @@ void ARViewer::setCurrentPose(const Sophus::SE3f& T_cw)
     current_pose_ = T_cw;
 }
 
+void ARViewer::updateReferencePlaneTracking()
+{
+    reference_plane_tracking_valid_ = false;
+    reference_plane_tracking_matches_ = 0;
+    reference_plane_tracking_inliers_ = 0;
+    reference_plane_tracking_rmse_ = 0.0f;
+    tracked_reference_plane_state_ = GroundPlaneState();
+
+    if (!reference_plane_initialized_ || !reference_plane_state_.valid) return;
+    if (!reference_plane_template_.valid || reference_plane_template_.image_points.size() < 8) return;
+    if (reference_plane_template_.gray_image.empty()) return;
+
+    cv::Mat frame;
+    {
+        std::lock_guard<std::mutex> lk(img_mutex_);
+        frame = current_bgr_.clone();
+    }
+    if (frame.empty()) return;
+
+    cv::Mat gray;
+    if (frame.channels() == 3) {
+        cv::cvtColor(frame, gray, cv::COLOR_BGR2GRAY);
+    } else {
+        gray = frame;
+    }
+
+    std::vector<cv::Point2f> tracked_points;
+    std::vector<uchar> status;
+    std::vector<float> err;
+    cv::calcOpticalFlowPyrLK(
+        reference_plane_template_.gray_image,
+        gray,
+        reference_plane_template_.image_points,
+        tracked_points,
+        status,
+        err,
+        cv::Size(21, 21),
+        3,
+        cv::TermCriteria(cv::TermCriteria::COUNT | cv::TermCriteria::EPS, 30, 0.01));
+
+    std::vector<cv::Point2f> template_pts_valid;
+    std::vector<cv::Point2f> tracked_pts_valid;
+    std::vector<cv::Point3f> object_pts_valid;
+    for (size_t i = 0; i < status.size(); ++i) {
+        if (!status[i]) continue;
+        const auto& p = tracked_points[i];
+        if (p.x < 0.0f || p.x >= gray.cols || p.y < 0.0f || p.y >= gray.rows) continue;
+        template_pts_valid.push_back(reference_plane_template_.image_points[i]);
+        tracked_pts_valid.push_back(p);
+        const auto& uv = reference_plane_template_.plane_uv[i];
+        object_pts_valid.emplace_back(uv.x(), uv.y(), 0.0f);
+    }
+
+    reference_plane_tracking_matches_ = static_cast<int>(tracked_pts_valid.size());
+    if (tracked_pts_valid.size() < 8) return;
+
+    std::vector<uchar> homography_inliers;
+    cv::findHomography(template_pts_valid, tracked_pts_valid, cv::RANSAC, 3.0, homography_inliers);
+
+    std::vector<cv::Point2f> tracked_pts_inliers;
+    std::vector<cv::Point3f> object_pts_inliers;
+    for (size_t i = 0; i < homography_inliers.size(); ++i) {
+        if (!homography_inliers[i]) continue;
+        tracked_pts_inliers.push_back(tracked_pts_valid[i]);
+        object_pts_inliers.push_back(object_pts_valid[i]);
+    }
+    reference_plane_tracking_inliers_ = static_cast<int>(tracked_pts_inliers.size());
+    if (tracked_pts_inliers.size() < 6) return;
+
+    cv::Mat K = (cv::Mat_<double>(3, 3) <<
+        fx_, 0.0, cx_,
+        0.0, fy_, cy_,
+        0.0, 0.0, 1.0);
+    cv::Mat rvec, tvec;
+    std::vector<int> pnp_inliers;
+    const bool ok = cv::solvePnPRansac(
+        object_pts_inliers,
+        tracked_pts_inliers,
+        K,
+        cv::Mat(),
+        rvec,
+        tvec,
+        false,
+        100,
+        4.0,
+        0.99,
+        pnp_inliers,
+        cv::SOLVEPNP_ITERATIVE);
+    if (!ok || pnp_inliers.size() < 6) return;
+
+    std::vector<cv::Point2f> reproj;
+    cv::projectPoints(object_pts_inliers, rvec, tvec, K, cv::Mat(), reproj);
+    double mse = 0.0;
+    for (size_t i = 0; i < reproj.size(); ++i) {
+        const cv::Point2f d = reproj[i] - tracked_pts_inliers[i];
+        mse += d.dot(d);
+    }
+    if (!reproj.empty()) {
+        mse /= static_cast<double>(reproj.size());
+        reference_plane_tracking_rmse_ = static_cast<float>(std::sqrt(mse));
+    }
+
+    cv::Mat R_cv;
+    cv::Rodrigues(rvec, R_cv);
+    Eigen::Matrix3f R_cp;
+    Eigen::Vector3f t_cp;
+    for (int r = 0; r < 3; ++r) {
+        for (int c = 0; c < 3; ++c) {
+            R_cp(r, c) = static_cast<float>(R_cv.at<double>(r, c));
+        }
+        t_cp(r) = static_cast<float>(tvec.at<double>(r, 0));
+    }
+
+    Sophus::SE3f T_cplane(Eigen::Quaternionf(R_cp), t_cp);
+    Sophus::SE3f T_wc;
+    {
+        std::lock_guard<std::mutex> lk(pose_mutex_);
+        T_wc = current_pose_.inverse();
+    }
+    const Sophus::SE3f T_wplane = T_wc * T_cplane;
+
+    tracked_reference_plane_state_ = reference_plane_state_;
+    tracked_reference_plane_state_.center = T_wplane.translation();
+    tracked_reference_plane_state_.axis_u = T_wplane.rotationMatrix().col(0).normalized();
+    tracked_reference_plane_state_.axis_v = T_wplane.rotationMatrix().col(1).normalized();
+    tracked_reference_plane_state_.normal = T_wplane.rotationMatrix().col(2).normalized();
+    tracked_reference_plane_state_.valid = true;
+    tracked_reference_plane_state_.locked = true;
+    reference_plane_tracking_valid_ = true;
+}
+
 // ---- Object management ----
 
 int ARViewer::addObject(
@@ -1365,6 +1519,26 @@ void ARViewer::renderReferencePlane()
     glUniform3f(glGetUniformLocation(point_shader_, "pointColor"), 1.0f, 0.3f, 0.2f);
     glLineWidth(3.0f);
     glDrawArrays(GL_LINES, 5, 2);
+
+    if (reference_plane_template_.valid && !reference_plane_template_.plane_uv.empty()) {
+        std::vector<float> template_vertices;
+        template_vertices.reserve(reference_plane_template_.plane_uv.size() * 3);
+        for (const auto& uv : reference_plane_template_.plane_uv) {
+            const Eigen::Vector3f p =
+                plane.center +
+                uv.x() * plane.axis_u +
+                uv.y() * plane.axis_v +
+                0.002f * plane.normal;
+            template_vertices.push_back(p.x());
+            template_vertices.push_back(p.y());
+            template_vertices.push_back(p.z());
+        }
+        glBufferData(GL_ARRAY_BUFFER, template_vertices.size() * sizeof(float),
+                     template_vertices.data(), GL_DYNAMIC_DRAW);
+        glUniform3f(glGetUniformLocation(point_shader_, "pointColor"), 1.0f, 0.95f, 0.1f);
+        glPointSize(6.0f);
+        glDrawArrays(GL_POINTS, 0, static_cast<GLsizei>(reference_plane_template_.plane_uv.size()));
+    }
 
     glBindVertexArray(0);
 }
@@ -1710,6 +1884,151 @@ bool ARViewer::initializeReferencePlaneFromClick(double px, double py)
     reference_plane_state_.valid = true;
     reference_plane_state_.locked = true;
 
+    if (reference_plane_state_.inlier_count < 40) {
+        plane_status_msg_ = "Reference plane rejected: not enough supporting map points";
+        return false;
+    }
+    if (reference_plane_state_.extent_u < 0.12f || reference_plane_state_.extent_v < 0.12f) {
+        plane_status_msg_ = "Reference plane rejected: plane region is too small";
+        return false;
+    }
+
+    Sophus::SE3f T_cw;
+    {
+        std::lock_guard<std::mutex> lk(const_cast<std::mutex&>(pose_mutex_));
+        T_cw = current_pose_;
+    }
+
+    const Eigen::Vector3f cam_pos = T_cw.inverse().translation();
+    const Eigen::Vector3f to_camera = (cam_pos - reference_plane_state_.center).normalized();
+    if (reference_plane_state_.normal.dot(to_camera) < 0.0f) {
+        reference_plane_state_.normal = -reference_plane_state_.normal;
+        reference_plane_state_.axis_u = -reference_plane_state_.axis_u;
+    }
+
+    const Eigen::Vector3f view_dir = (cam_pos - reference_plane_state_.center).normalized();
+    const float view_alignment = std::abs(reference_plane_state_.normal.dot(view_dir));
+    if (view_alignment < 0.20f) {
+        plane_status_msg_ = "Reference plane rejected: viewing angle is too oblique";
+        return false;
+    }
+
+    cv::Mat frame;
+    {
+        std::lock_guard<std::mutex> lk(img_mutex_);
+        frame = current_bgr_.clone();
+    }
+    if (frame.empty()) {
+        plane_status_msg_ = "Reference plane rejected: current image is unavailable";
+        return false;
+    }
+
+    const Eigen::Vector3f c = reference_plane_state_.center;
+    const Eigen::Vector3f du = reference_plane_state_.extent_u * reference_plane_state_.axis_u;
+    const Eigen::Vector3f dv = reference_plane_state_.extent_v * reference_plane_state_.axis_v;
+    const Eigen::Vector3f corners_world[4] = {
+        c - du - dv,
+        c + du - dv,
+        c + du + dv,
+        c - du + dv
+    };
+
+    std::vector<cv::Point> polygon;
+    polygon.reserve(4);
+    for (const auto& corner : corners_world) {
+        cv::Point2f img_pt;
+        if (!ProjectWorldPointToImage(T_cw, img_w_, img_h_, fx_, fy_, cx_, cy_, corner, img_pt)) {
+            plane_status_msg_ = "Reference plane rejected: plane is not fully visible";
+            return false;
+        }
+        polygon.emplace_back(cv::Point(
+            static_cast<int>(std::round(img_pt.x)),
+            static_cast<int>(std::round(img_pt.y))));
+    }
+
+    const double polygon_area = std::abs(cv::contourArea(polygon));
+    if (polygon_area < 4000.0) {
+        plane_status_msg_ = "Reference plane rejected: visible plane area is too small";
+        return false;
+    }
+
+    cv::Mat mask(frame.rows, frame.cols, CV_8UC1, cv::Scalar(0));
+    std::vector<std::vector<cv::Point>> fill_poly = {polygon};
+    cv::fillPoly(mask, fill_poly, cv::Scalar(255));
+
+    cv::Mat gray;
+    if (frame.channels() == 3) {
+        cv::cvtColor(frame, gray, cv::COLOR_BGR2GRAY);
+    } else {
+        gray = frame;
+    }
+
+    std::vector<cv::Point2f> corners;
+    cv::goodFeaturesToTrack(gray, corners, 120, 0.01, 8.0, mask, 3, false, 0.04);
+    if (corners.size() < 20) {
+        plane_status_msg_ = "Reference plane rejected: not enough image features on the plane";
+        return false;
+    }
+
+    cv::Rect bbox = cv::boundingRect(polygon);
+    bbox &= cv::Rect(0, 0, frame.cols, frame.rows);
+    int occupied_cells = 0;
+    if (bbox.width > 0 && bbox.height > 0) {
+        bool occupied[3][3] = {};
+        for (const auto& pt : corners) {
+            const int cx_idx = std::clamp((int)((pt.x - bbox.x) * 3.0f / std::max(1, bbox.width)), 0, 2);
+            const int cy_idx = std::clamp((int)((pt.y - bbox.y) * 3.0f / std::max(1, bbox.height)), 0, 2);
+            occupied[cy_idx][cx_idx] = true;
+        }
+        for (int r = 0; r < 3; ++r)
+            for (int col = 0; col < 3; ++col)
+                occupied_cells += occupied[r][col] ? 1 : 0;
+    }
+    if (occupied_cells < 4) {
+        plane_status_msg_ = "Reference plane rejected: image features are not well distributed";
+        return false;
+    }
+
+    reference_plane_template_ = ReferencePlaneTemplate();
+    reference_plane_template_.gray_image = gray.clone();
+    reference_plane_template_.image_points.clear();
+    reference_plane_template_.plane_uv.clear();
+
+    bool cell_used[4][4] = {};
+    for (const auto& pt : corners) {
+        const int gx = std::clamp((int)((pt.x - bbox.x) * 4.0f / std::max(1, bbox.width)), 0, 3);
+        const int gy = std::clamp((int)((pt.y - bbox.y) * 4.0f / std::max(1, bbox.height)), 0, 3);
+        if (cell_used[gy][gx]) continue;
+
+        Eigen::Vector3f world_pt;
+        if (!ProjectScreenPointToPlane(
+                T_cw,
+                img_w_, img_h_,
+                fx_, fy_, cx_, cy_,
+                pt.x, pt.y,
+                reference_plane_state_,
+                world_pt)) {
+            continue;
+        }
+
+        const Eigen::Vector3f delta = world_pt - reference_plane_state_.center;
+        reference_plane_template_.image_points.push_back(pt);
+        reference_plane_template_.plane_uv.emplace_back(
+            delta.dot(reference_plane_state_.axis_u),
+            delta.dot(reference_plane_state_.axis_v));
+        cell_used[gy][gx] = true;
+
+        if (reference_plane_template_.plane_uv.size() >= 16) break;
+    }
+
+    if (reference_plane_template_.plane_uv.size() < 8) {
+        plane_status_msg_ = "Reference plane rejected: not enough template features after filtering";
+        reference_plane_template_ = ReferencePlaneTemplate();
+        return false;
+    }
+
+    reference_plane_template_.valid = true;
+
     reference_plane_initialized_ = true;
     init_reference_plane_mode_ = false;
     plane_status_msg_ = "Reference plane initialized. Click to place the virtual object.";
@@ -1797,8 +2116,7 @@ bool ARViewer::moveObjectToNearestMapPoint(int obj_id, double px, double py, flo
         objects_[obj_id].anchor_plane_state,
         objects_[obj_id].ground_uv,
         objects_[obj_id].ground_height_offset,
-        objects_[obj_id].ground_yaw_rad,
-        objects_[obj_id].model_rotation_correction);
+        objects_[obj_id].ground_yaw_rad);
     last_object_anchored_ = true;
     last_anchor_world_ = place_pt;
     last_anchor_normal_ = plane_normal;

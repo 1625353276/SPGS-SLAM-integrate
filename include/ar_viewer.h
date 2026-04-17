@@ -128,6 +128,14 @@ struct VirtualObject
     int           anchor_update_stable_frames = 0;
 };
 
+struct ReferencePlaneTemplate
+{
+    bool valid = false;
+    cv::Mat gray_image;
+    std::vector<cv::Point2f> image_points;
+    std::vector<Eigen::Vector2f> plane_uv;
+};
+
 // ============================================================================
 // Dataset Player (TUM RGBD format)
 // ============================================================================
@@ -251,6 +259,7 @@ public:
 private:
     bool show_map_points_   = false;
     bool show_paths_        = true;
+    bool show_reference_plane_ = true;
     bool show_gaussian_bg_  = false;   // Gaussian background preview
     bool init_reference_plane_mode_ = false;
     bool reference_plane_initialized_ = false;
@@ -263,6 +272,12 @@ private:
     Eigen::Vector3f last_anchor_world_ = Eigen::Vector3f::Zero();
     Eigen::Vector3f last_anchor_normal_ = Eigen::Vector3f::Zero();
     GroundPlaneState reference_plane_state_;
+    ReferencePlaneTemplate reference_plane_template_;
+    GroundPlaneState tracked_reference_plane_state_;
+    bool reference_plane_tracking_valid_ = false;
+    int  reference_plane_tracking_matches_ = 0;
+    int  reference_plane_tracking_inliers_ = 0;
+    float reference_plane_tracking_rmse_ = 0.0f;
 
     // Gaussian Mapper (optional)
     std::shared_ptr<GaussianMapper> pGausMapper_;
@@ -282,6 +297,7 @@ private:
     void renderBackground();
     void renderVirtualObjects();
     void updateWalkingObjects(float dt);
+    void updateReferencePlaneTracking();
 
     // Projection matrix from camera intrinsics
     glm::mat4 buildProjectionMatrix() const;
