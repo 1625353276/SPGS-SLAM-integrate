@@ -91,6 +91,40 @@ float ApproachAngleRad(float current, float target, float max_step)
     return current + (delta > 0.0f ? max_step : -max_step);
 }
 
+bool ProjectScreenPointToPlane(const Sophus::SE3f& T_cw,
+                               int img_w, int img_h,
+                               float fx, float fy, float cx, float cy,
+                               double px, double py,
+                               const GroundPlaneState& plane,
+                               Eigen::Vector3f& world_pt)
+{
+    if (!plane.valid) return false;
+    if (px < 0.0 || px >= img_w || py < 0.0 || py >= img_h) return false;
+
+    Eigen::Vector3f ray_cam(
+        (static_cast<float>(px) - cx) / fx,
+        (static_cast<float>(py) - cy) / fy,
+        1.0f);
+    ray_cam.normalize();
+
+    const Sophus::SE3f T_wc = T_cw.inverse();
+    const Eigen::Vector3f cam_pos = T_wc.translation();
+    const Eigen::Vector3f ray_world = T_wc.rotationMatrix() * ray_cam;
+
+    const float denom = plane.normal.dot(ray_world);
+    if (std::abs(denom) < 1e-5f) return false;
+
+    const float t = plane.normal.dot(plane.center - cam_pos) / denom;
+    if (t <= 0.0f) return false;
+
+    world_pt = cam_pos + t * ray_world;
+    const Eigen::Vector3f delta = world_pt - plane.center;
+    const float u = delta.dot(plane.axis_u);
+    const float v = delta.dot(plane.axis_v);
+    return std::abs(u) <= plane.extent_u * 1.25f &&
+           std::abs(v) <= plane.extent_v * 1.25f;
+}
+
 } // namespace
 
 // ============================================================================
@@ -1230,6 +1264,7 @@ void ARViewer::setObjectPose(int id, const Sophus::SE3f& pose)
         objects_[id].pose = pose;
         objects_[id].anchored_to_ground = false;
         objects_[id].anchor_plane_state = GroundPlaneState();
+        objects_[id].anchor_update_stable_frames = 0;
     }
 }
 
@@ -1265,6 +1300,7 @@ void ARViewer::resetObjectPlacement(int id)
     obj.path_cursor = 0;
     obj.is_walking = false;
     obj.current_walk_speed = 0.0f;
+    obj.anchor_update_stable_frames = 0;
     plane_status_msg_ = "Model reset. Click to place again.";
     last_path_plan_success_ = false;
     last_planned_waypoint_count_ = 0;
@@ -1613,6 +1649,7 @@ bool ARViewer::moveObjectToNearestMapPoint(int obj_id, double px, double py, flo
     objects_[obj_id].path_cursor = 0;
     objects_[obj_id].is_walking = false;
     objects_[obj_id].current_walk_speed = 0.0f;
+    objects_[obj_id].anchor_update_stable_frames = 0;
     objects_[obj_id].pose = BuildGroundAnchoredPose(
         objects_[obj_id].anchor_plane_state,
         objects_[obj_id].ground_uv,
@@ -1634,9 +1671,21 @@ bool ARViewer::planObjectPathToScreenPos(int obj_id, double px, double py)
     auto& obj = objects_[obj_id];
     if (!obj.anchored_to_ground || !obj.anchor_plane_state.valid) return false;
 
+    Sophus::SE3f T_cw;
+    {
+        std::lock_guard<std::mutex> lk(pose_mutex_);
+        T_cw = current_pose_;
+    }
+
     Eigen::Vector3f target_world;
-    if (!ground_plane_tracker_->projectScreenPointToPlane(px, py, target_world)) {
-        plane_status_msg_ = "Target click is outside the tracked ground plane";
+    if (!ProjectScreenPointToPlane(
+            T_cw,
+            img_w_, img_h_,
+            fx_, fy_, cx_, cy_,
+            px, py,
+            obj.anchor_plane_state,
+            target_world)) {
+        plane_status_msg_ = "Target click is outside the reference plane";
         return false;
     }
 

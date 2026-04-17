@@ -64,6 +64,7 @@ private:
                      GroundPlaneState& plane) const;
     bool isPlaneStableWith(const GroundPlaneState& reference,
                            const GroundPlaneState& candidate) const;
+    void smoothUpdateReferencePlane(const GroundPlaneState& candidate);
     void updateStatusNoCandidate();
 
 private:

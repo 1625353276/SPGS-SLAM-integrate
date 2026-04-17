@@ -123,6 +123,7 @@ struct VirtualObject
     size_t        path_cursor = 0;
     bool          is_walking = false;
     float         current_walk_speed = 0.0f;
+    int           anchor_update_stable_frames = 0;
 };
 
 // ============================================================================

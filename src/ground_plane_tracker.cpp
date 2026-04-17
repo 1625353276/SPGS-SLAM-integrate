@@ -25,6 +25,9 @@ constexpr int   kMaxDegradedFrames = 10;
 constexpr float kMaxStableAngleRad = 15.0f * 3.1415926535f / 180.0f;
 constexpr float kMaxStableCenterDist = 0.20f;
 constexpr float kMaxStableExtentRatioDelta = 0.60f;
+constexpr float kReferenceNormalLerp = 0.08f;
+constexpr float kReferenceCenterLerp = 0.10f;
+constexpr float kReferenceExtentLerp = 0.12f;
 
 Eigen::Vector3f BuildPlaneAxisU(const Eigen::Vector3f& normal)
 {
@@ -98,10 +101,12 @@ void GroundPlaneTracker::update(const Sophus::SE3f& T_cw,
     }
 
     if (isPlaneStableWith(plane_state_, candidate)) {
-        plane_state_ = candidate;
+        smoothUpdateReferencePlane(candidate);
         plane_state_.locked = true;
         plane_state_.status = GroundPlaneStatus::Locked;
         plane_state_.stability_score = 1.0f;
+        plane_state_.inlier_count = candidate.inlier_count;
+        plane_state_.mean_residual = candidate.mean_residual;
         degraded_frames_ = 0;
         last_candidate_ = candidate;
         last_candidate_valid_ = true;
@@ -357,6 +362,52 @@ bool GroundPlaneTracker::isPlaneStableWith(const GroundPlaneState& reference,
            center_dist < kMaxStableCenterDist &&
            ratio_u < kMaxStableExtentRatioDelta &&
            ratio_v < kMaxStableExtentRatioDelta;
+}
+
+void GroundPlaneTracker::smoothUpdateReferencePlane(const GroundPlaneState& candidate)
+{
+    if (!plane_state_.valid) {
+        plane_state_ = candidate;
+        return;
+    }
+
+    Eigen::Vector3f candidate_normal = candidate.normal;
+    if (plane_state_.normal.dot(candidate_normal) < 0.0f) {
+        candidate_normal = -candidate_normal;
+    }
+
+    Eigen::Vector3f blended_normal =
+        (1.0f - kReferenceNormalLerp) * plane_state_.normal +
+        kReferenceNormalLerp * candidate_normal;
+    if (blended_normal.norm() < 1e-6f) {
+        blended_normal = candidate_normal;
+    } else {
+        blended_normal.normalize();
+    }
+
+    Eigen::Vector3f blended_center =
+        (1.0f - kReferenceCenterLerp) * plane_state_.center +
+        kReferenceCenterLerp * candidate.center;
+
+    Eigen::Vector3f axis_u = candidate.axis_u;
+    axis_u = axis_u - axis_u.dot(blended_normal) * blended_normal;
+    if (axis_u.norm() < 1e-6f) {
+        axis_u = BuildPlaneAxisU(blended_normal);
+    } else {
+        axis_u.normalize();
+    }
+    Eigen::Vector3f axis_v = blended_normal.cross(axis_u).normalized();
+
+    plane_state_.normal = blended_normal;
+    plane_state_.center = blended_center;
+    plane_state_.axis_u = axis_u;
+    plane_state_.axis_v = axis_v;
+    plane_state_.extent_u =
+        (1.0f - kReferenceExtentLerp) * plane_state_.extent_u +
+        kReferenceExtentLerp * candidate.extent_u;
+    plane_state_.extent_v =
+        (1.0f - kReferenceExtentLerp) * plane_state_.extent_v +
+        kReferenceExtentLerp * candidate.extent_v;
 }
 
 void GroundPlaneTracker::updateStatusNoCandidate()
