@@ -111,6 +111,8 @@ struct VirtualObject
     std::string   obj_path;
     std::string   texture_path;
     bool          gpu_uploaded = false;
+    Eigen::Quaternionf model_rotation_correction = Eigen::Quaternionf::Identity();
+    Eigen::Vector3f    model_local_offset = Eigen::Vector3f::Zero();
 
     // Ground-plane anchor state. When enabled, pose is reconstructed each frame
     // from plane-local coordinates instead of trusting a stale world translation.
@@ -250,6 +252,8 @@ private:
     bool show_map_points_   = false;
     bool show_paths_        = true;
     bool show_gaussian_bg_  = false;   // Gaussian background preview
+    bool init_reference_plane_mode_ = false;
+    bool reference_plane_initialized_ = false;
     NavGridBuildParams nav_grid_params_;
     int  last_visible_map_points_ = 0;
     int  last_projected_map_points_ = 0;
@@ -258,6 +262,7 @@ private:
     bool last_object_anchored_ = false;
     Eigen::Vector3f last_anchor_world_ = Eigen::Vector3f::Zero();
     Eigen::Vector3f last_anchor_normal_ = Eigen::Vector3f::Zero();
+    GroundPlaneState reference_plane_state_;
 
     // Gaussian Mapper (optional)
     std::shared_ptr<GaussianMapper> pGausMapper_;
@@ -265,6 +270,7 @@ private:
     // Render map points as small dots (visualization)
     void renderMapPoints();
     void renderPlannedPaths();
+    void renderReferencePlane();
 
     bool initGL();
     void initShaders();
@@ -289,6 +295,7 @@ private:
                                Eigen::Vector3f& plane_normal,
                                Eigen::Vector3f& plane_point,
                                int min_inliers = 6);
+    bool initializeReferencePlaneFromClick(double px, double py);
     bool planObjectPathToScreenPos(int obj_id, double px, double py);
 
     // Callbacks
@@ -322,6 +329,8 @@ private:
     GLuint mp_vbo_ = 0;
     GLuint path_vao_ = 0;
     GLuint path_vbo_ = 0;
+    GLuint plane_vao_ = 0;
+    GLuint plane_vbo_ = 0;
 
     // Virtual objects
     std::vector<VirtualObject> objects_;

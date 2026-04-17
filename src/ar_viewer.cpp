@@ -28,7 +28,8 @@ namespace {
 Sophus::SE3f BuildGroundAnchoredPose(const GroundPlaneState& plane,
                                      const Eigen::Vector2f& uv,
                                      float height_offset,
-                                     float yaw_rad)
+                                     float yaw_rad,
+                                     const Eigen::Quaternionf& model_rotation = Eigen::Quaternionf::Identity())
 {
     const Eigen::Vector3f position =
         plane.center +
@@ -55,7 +56,9 @@ Sophus::SE3f BuildGroundAnchoredPose(const GroundPlaneState& plane,
     R_world.col(1) = up;
     R_world.col(2) = forward;
 
-    return Sophus::SE3f(Eigen::Quaternionf(R_world), position);
+    // Apply model-specific rotation correction from YAML config
+    Eigen::Quaternionf R_world_q(R_world);
+    return Sophus::SE3f(R_world_q * model_rotation, position);
 }
 
 std::vector<Eigen::Vector2f> ProjectMapPointsToPlaneUV(
@@ -674,7 +677,35 @@ void ARViewer::run()
             }
         }
 
-        ImGui::Text("Click to place object on detected plane");
+        ImGui::Separator();
+        ImGui::Text("Reference Plane:");
+        if (!reference_plane_initialized_) {
+            if (ImGui::Button(init_reference_plane_mode_ ? "Cancel Init Reference Plane"
+                                                         : "Init Reference Plane")) {
+                init_reference_plane_mode_ = !init_reference_plane_mode_;
+                plane_status_msg_ = init_reference_plane_mode_
+                    ? "Click a stable plane region to initialize the reference plane."
+                    : "Reference plane initialization canceled.";
+            }
+        } else {
+            if (ImGui::Button("Reinit Reference Plane")) {
+                reference_plane_initialized_ = false;
+                reference_plane_state_ = GroundPlaneState();
+                init_reference_plane_mode_ = true;
+                plane_status_msg_ = "Reference plane cleared. Click a stable plane region to reinitialize.";
+                if (!objects_.empty()) {
+                    resetObjectPlacement(0);
+                }
+            }
+        }
+
+        ImGui::Text("Reference Plane: %s",
+                    reference_plane_initialized_ ? "initialized" :
+                    (init_reference_plane_mode_ ? "waiting for click" : "not initialized"));
+        ImGui::Text("%s",
+                    reference_plane_initialized_
+                        ? "Click to place object, then click again to move it."
+                        : "Initialize a reference plane before placing any virtual object.");
         ImGui::Text("ESC to quit");
 
         if (!objects_.empty()) {
@@ -689,6 +720,13 @@ void ARViewer::run()
             ImGui::Text("Ground Plane: %s", ground_plane_tracker_->getStatusString().c_str());
             ImGui::Text("Inliers: %d  Residual: %.4f", plane_state.inlier_count, plane_state.mean_residual);
             ImGui::Text("Stability: %.2f", plane_state.stability_score);
+            if (reference_plane_initialized_) {
+                ImGui::Text("Ref Inliers: %d", reference_plane_state_.inlier_count);
+                ImGui::Text("Ref N: %.3f %.3f %.3f",
+                            reference_plane_state_.normal.x(),
+                            reference_plane_state_.normal.y(),
+                            reference_plane_state_.normal.z());
+            }
         }
 
         if (!objects_.empty()) {
@@ -821,6 +859,7 @@ void ARViewer::render()
 
     renderBackground();
     if (show_map_points_) renderMapPoints();
+    renderReferencePlane();
     if (show_paths_) renderPlannedPaths();
     // Note: Occlusion features removed - virtual objects always visible
     renderVirtualObjects();
@@ -896,7 +935,8 @@ void ARViewer::renderVirtualObjects()
                 obj.anchor_plane_state,
                 obj.ground_uv,
                 obj.ground_height_offset,
-                obj.ground_yaw_rad);
+                obj.ground_yaw_rad,
+                obj.model_rotation_correction);
         }
 
         // Use a fixed light direction and fixed ambient term.
@@ -919,6 +959,16 @@ void ARViewer::renderVirtualObjects()
                 M[c][r] = R(r, c);
         M[3][0] = t.x(); M[3][1] = t.y(); M[3][2] = t.z();
 
+        glm::mat4 correction(1.0f);
+        const Eigen::Matrix3f R_corr = obj.model_rotation_correction.toRotationMatrix();
+        for (int r = 0; r < 3; r++)
+            for (int c = 0; c < 3; c++)
+                correction[c][r] = R_corr(r, c);
+        correction[3][0] = obj.model_local_offset.x();
+        correction[3][1] = obj.model_local_offset.y();
+        correction[3][2] = obj.model_local_offset.z();
+
+        M = M * correction;
         M = glm::scale(M, obj.scale);
 
         glm::mat4 MVP = P * V * M;
@@ -1268,6 +1318,57 @@ void ARViewer::setObjectPose(int id, const Sophus::SE3f& pose)
     }
 }
 
+void ARViewer::renderReferencePlane()
+{
+    if (!reference_plane_initialized_ || !reference_plane_state_.valid) return;
+
+    const GroundPlaneState& plane = reference_plane_state_;
+    const Eigen::Vector3f c = plane.center;
+    const Eigen::Vector3f du = plane.extent_u * plane.axis_u;
+    const Eigen::Vector3f dv = plane.extent_v * plane.axis_v;
+    const Eigen::Vector3f p0 = c - du - dv;
+    const Eigen::Vector3f p1 = c + du - dv;
+    const Eigen::Vector3f p2 = c + du + dv;
+    const Eigen::Vector3f p3 = c - du + dv;
+    const Eigen::Vector3f n0 = c;
+    const Eigen::Vector3f n1 = c + 0.20f * plane.normal;
+
+    const std::vector<float> vertices = {
+        p0.x(), p0.y(), p0.z(),
+        p1.x(), p1.y(), p1.z(),
+        p2.x(), p2.y(), p2.z(),
+        p3.x(), p3.y(), p3.z(),
+        p0.x(), p0.y(), p0.z(),
+        n0.x(), n0.y(), n0.z(),
+        n1.x(), n1.y(), n1.z()
+    };
+
+    if (!plane_vao_) glGenVertexArrays(1, &plane_vao_);
+    if (!plane_vbo_) glGenBuffers(1, &plane_vbo_);
+
+    glBindVertexArray(plane_vao_);
+    glBindBuffer(GL_ARRAY_BUFFER, plane_vbo_);
+    glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(float), vertices.data(), GL_DYNAMIC_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
+
+    const glm::mat4 MVP = buildProjectionMatrix() * buildViewMatrix();
+    glEnable(GL_DEPTH_TEST);
+    glDepthMask(GL_TRUE);
+    glUseProgram(point_shader_);
+    glUniformMatrix4fv(glGetUniformLocation(point_shader_, "MVP"), 1, GL_FALSE, &MVP[0][0]);
+
+    glUniform3f(glGetUniformLocation(point_shader_, "pointColor"), 0.1f, 0.9f, 1.0f);
+    glLineWidth(2.5f);
+    glDrawArrays(GL_LINE_STRIP, 0, 5);
+
+    glUniform3f(glGetUniformLocation(point_shader_, "pointColor"), 1.0f, 0.3f, 0.2f);
+    glLineWidth(3.0f);
+    glDrawArrays(GL_LINES, 5, 2);
+
+    glBindVertexArray(0);
+}
+
 void ARViewer::setObjectVisible(int id, bool visible)
 {
     std::lock_guard<std::mutex> lk(obj_mutex_);
@@ -1438,6 +1539,8 @@ bool ARViewer::switchModel(int model_index)
     obj.obj_path = config.obj_path;
     obj.texture_path = config.texture_path;
     obj.pose = obj_pose;
+    obj.model_rotation_correction = Eigen::Quaternionf(rot_z * rot_y * rot_x);
+    obj.model_local_offset = Eigen::Vector3f(0.0f, 0.0f, config.default_y_offset);
     obj.scale = config.default_scale;
     obj.visible = false;  // Hidden until placed
     obj.gpu_uploaded = false;
@@ -1483,6 +1586,11 @@ void ARViewer::mouseCallback(GLFWwindow* w, int button, int action, int)
 
     double px, py;
     glfwGetCursorPos(w, &px, &py);
+
+    if (v->init_reference_plane_mode_ || !v->reference_plane_initialized_) {
+        v->initializeReferencePlaneFromClick(px, py);
+        return;
+    }
 
     // Move first object to clicked position
     {
@@ -1566,42 +1674,79 @@ bool ARViewer::fitPlaneFromMapPoints(
     return true;
 }
 
-bool ARViewer::moveObjectToNearestMapPoint(int obj_id, double px, double py, float /*max_pixel_dist*/)
+bool ARViewer::initializeReferencePlaneFromClick(double px, double py)
 {
-    if (obj_id < 0 || obj_id >= (int)objects_.size()) return false;
     if (!ground_plane_tracker_) return false;
     if (!ground_plane_tracker_->hasLockedPlane()) {
         plane_status_msg_ = "Ground plane not locked yet";
         return false;
     }
 
-    // -----------------------------------------------------------------------
-    // Detect a local plane using progressively larger search radii.
-    // Start small (50 px) to prefer a tight local plane; grow up to 250 px
-    // if not enough map points are found at the smaller radius.
-    // -----------------------------------------------------------------------
-    Eigen::Vector3f plane_normal, place_pt;
-    if (!fitPlaneFromMapPoints(px, py, 0.0f, plane_normal, place_pt)) {
-        plane_status_msg_ = "未检测到平面，请在特征点可见处点击";
+    Eigen::Vector3f plane_normal, hit_point;
+    if (!fitPlaneFromMapPoints(px, py, 0.0f, plane_normal, hit_point)) {
         plane_status_msg_ = "Click does not hit the locked ground plane";
         return false;
     }
-    plane_status_msg_.clear();
 
-    // -----------------------------------------------------------------------
-    // Build a rotation matrix that stands the object on the detected plane
-    // and faces it toward the camera. (Gram-Schmidt orthogonalization)
-    //
-    // Convention (SpongeBob OBJ):
-    //   model  Y axis = "up"    → world plane_normal
-    //   model -Z axis = "front" → toward camera projected onto plane
-    // -----------------------------------------------------------------------
+    reference_plane_state_ = ground_plane_tracker_->getState();
+    reference_plane_state_.center = hit_point;
+    reference_plane_state_.normal = plane_normal.normalized();
+
+    Eigen::Vector3f axis_u = reference_plane_state_.axis_u;
+    axis_u -= axis_u.dot(reference_plane_state_.normal) * reference_plane_state_.normal;
+    if (axis_u.norm() < 1e-5f) {
+        const Eigen::Vector3f arbitrary =
+            (std::abs(reference_plane_state_.normal.x()) < 0.9f)
+                ? Eigen::Vector3f::UnitX()
+                : Eigen::Vector3f::UnitY();
+        axis_u = arbitrary - arbitrary.dot(reference_plane_state_.normal) * reference_plane_state_.normal;
+    }
+    axis_u.normalize();
+    Eigen::Vector3f axis_v = reference_plane_state_.normal.cross(axis_u).normalized();
+    axis_u = axis_v.cross(reference_plane_state_.normal).normalized();
+
+    reference_plane_state_.axis_u = axis_u;
+    reference_plane_state_.axis_v = axis_v;
+    reference_plane_state_.valid = true;
+    reference_plane_state_.locked = true;
+
+    reference_plane_initialized_ = true;
+    init_reference_plane_mode_ = false;
+    plane_status_msg_ = "Reference plane initialized. Click to place the virtual object.";
+    last_anchor_world_ = hit_point;
+    last_anchor_normal_ = reference_plane_state_.normal;
+    return true;
+}
+
+bool ARViewer::moveObjectToNearestMapPoint(int obj_id, double px, double py, float /*max_pixel_dist*/)
+{
+    if (obj_id < 0 || obj_id >= (int)objects_.size()) return false;
+    if (!reference_plane_initialized_ || !reference_plane_state_.valid) {
+        plane_status_msg_ = "Initialize a reference plane before placing objects";
+        return false;
+    }
+
     Sophus::SE3f T_cw;
     {
         std::lock_guard<std::mutex> lk(const_cast<std::mutex&>(pose_mutex_));
         T_cw = current_pose_;
     }
-    Eigen::Vector3f cam_pos = T_cw.inverse().translation();
+
+    Eigen::Vector3f place_pt;
+    if (!ProjectScreenPointToPlane(
+            T_cw,
+            img_w_, img_h_,
+            fx_, fy_, cx_, cy_,
+            px, py,
+            reference_plane_state_,
+            place_pt)) {
+        plane_status_msg_ = "Click does not hit the reference plane";
+        return false;
+    }
+    plane_status_msg_.clear();
+
+    const Eigen::Vector3f plane_normal = reference_plane_state_.normal.normalized();
+    const Eigen::Vector3f cam_pos = T_cw.inverse().translation();
 
     Eigen::Vector3f up = plane_normal;  // new "up" axis in world space
 
@@ -1629,15 +1774,13 @@ bool ARViewer::moveObjectToNearestMapPoint(int obj_id, double px, double py, flo
     R_world.col(1) =  up;
     R_world.col(2) =  forward;
 
-    Sophus::SE3f new_pose(Eigen::Quaternionf(R_world), place_pt);
-    objects_[obj_id].pose = new_pose;
+    objects_[obj_id].pose = Sophus::SE3f(Eigen::Quaternionf(R_world), place_pt);
 
-    const GroundPlaneState& plane_state = ground_plane_tracker_->getState();
-    Eigen::Vector2f ground_uv;
-    if (!ground_plane_tracker_->worldToPlaneUV(place_pt, ground_uv)) {
-        plane_status_msg_ = "Failed to convert placement to plane coordinates";
-        return false;
-    }
+    const GroundPlaneState& plane_state = reference_plane_state_;
+    const Eigen::Vector3f delta = place_pt - plane_state.center;
+    const Eigen::Vector2f ground_uv(
+        delta.dot(plane_state.axis_u),
+        delta.dot(plane_state.axis_v));
 
     objects_[obj_id].ground_uv = ground_uv;
     objects_[obj_id].ground_height_offset = 0.0f;
@@ -1654,7 +1797,8 @@ bool ARViewer::moveObjectToNearestMapPoint(int obj_id, double px, double py, flo
         objects_[obj_id].anchor_plane_state,
         objects_[obj_id].ground_uv,
         objects_[obj_id].ground_height_offset,
-        objects_[obj_id].ground_yaw_rad);
+        objects_[obj_id].ground_yaw_rad,
+        objects_[obj_id].model_rotation_correction);
     last_object_anchored_ = true;
     last_anchor_world_ = place_pt;
     last_anchor_normal_ = plane_normal;
