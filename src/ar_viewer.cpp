@@ -1884,7 +1884,7 @@ bool ARViewer::initializeReferencePlaneFromClick(double px, double py)
     reference_plane_state_.valid = true;
     reference_plane_state_.locked = true;
 
-    if (reference_plane_state_.inlier_count < 40) {
+    if (reference_plane_state_.inlier_count < 30) {
         plane_status_msg_ = "Reference plane rejected: not enough supporting map points";
         return false;
     }

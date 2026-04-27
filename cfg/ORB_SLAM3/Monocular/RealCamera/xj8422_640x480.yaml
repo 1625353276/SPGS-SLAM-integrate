@@ -51,7 +51,7 @@ ORBextractor.iniThFAST: 20
 ORBextractor.minThFAST: 7
 
 # Force Local BA after skipping this many keyframes (0 to disable, default 0)
-LocalMapping.maxSkipBA: 0
+LocalMapping.maxSkipBA: 10
 
 #--------------------------------------------------------------------------------------------
 # Viewer Parameters
